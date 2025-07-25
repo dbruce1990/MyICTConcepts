@@ -1,0 +1,236 @@
+//@version=6
+indicator("ICT Cursor", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=5000)
+
+// === SWING POINT TYPE & ARRAYS ===
+type SwingPoint
+    int xBar
+    int xTime
+    float y
+    string state // "active", "swept", "closed_through"
+    int sweepX
+    int closedX
+    line lineDrawing = na
+
+var swingHighs = array.new<SwingPoint>()
+var swingLows = array.new<SwingPoint>()
+
+// === SWING POINT SETTINGS ===
+inputGroupSwings = "Swing Point Settings"
+showActiveSwings = input.bool(true, "Show Active Swings", group=inputGroupSwings, tooltip="Show swing points that have not been swept or closed through.")
+showSweptSwings = input.bool(true, "Show Swept Swings", group=inputGroupSwings, tooltip="Show swing points that have been swept (wicked through) but not closed through.")
+maxSweptSwings = input.int(5, "Max Swept Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of swept swings to display.")
+showClosedSwings = input.bool(false, "Show Closed-Through Swings", group=inputGroupSwings, tooltip="Show swing points that have been closed through (break of structure). Useful for market structure analysis.")
+maxClosedSwings = input.int(3, "Max Closed Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of closed-through swings to display.")
+activeHighColor = input.color(color.black, "Active High Color", group=inputGroupSwings, tooltip="Color for active swing high lines.")
+activeLowColor = input.color(color.black, "Active Low Color", group=inputGroupSwings, tooltip="Color for active swing low lines.")
+sweptHighColor = input.color(color.black, "Swept High Color", group=inputGroupSwings, tooltip="Color for swept swing high lines.")
+sweptLowColor = input.color(color.black, "Swept Low Color", group=inputGroupSwings, tooltip="Color for swept swing low lines.")
+closedHighColor = input.color(#616161, "Closed High Color", group=inputGroupSwings, tooltip="Color for closed-through swing high lines.")
+closedLowColor = input.color(#616161, "Closed Low Color", group=inputGroupSwings, tooltip="Color for closed-through swing low lines.")
+activeSwingStyle = input.string("solid", "Active Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for active swings.")
+sweptSwingStyle = input.string("dashed", "Swept Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for swept swings.")
+closedSwingStyle = input.string("dotted", "Closed-Through Swing Style", options=["solid", "dashed", "dotted"], group=inputGroupSwings, tooltip="Line style for closed-through swings.")
+maxSwingPoints = input.int(100, "Max Swing Points Stored", minval=20, maxval=500, group=inputGroupSwings, tooltip="Maximum number of swing points to keep in memory. Older points will be removed for performance.")
+lookbackBars = input.int(500, "Bars to Display", minval=50, maxval=5000, group=inputGroupSwings, tooltip="Only show swing points from the last N bars.")
+
+// === BULLETPROOF ARRAY CAPPING ===
+while array.size(swingHighs) > maxSwingPoints
+    swing = array.shift(swingHighs)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+while array.size(swingLows) > maxSwingPoints
+    swing = array.shift(swingLows)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+
+// === SWING DETECTION (3-bar pivots) ===
+if barstate.isconfirmed
+    // Highs
+    if high[1] > high[0] and high[1] > high[2]
+        swing = SwingPoint.new()
+        swing.y := high[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingHighs, swing)
+    // Lows
+    if low[1] < low[0] and low[1] < low[2]
+        swing = SwingPoint.new()
+        swing.y := low[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingLows, swing)
+
+// === SWING RENDERING ===
+renderSwings(array<SwingPoint> swings, bool isHigh) =>
+    if array.size(swings) > 0
+        sweptIdx = array.new_int()
+        closedIdx = array.new_int()
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            // Only process/display if within lookback window
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            // Update state
+            if swing.state == "active"
+                swept = isHigh ? high > swing.y : low < swing.y
+                closed = isHigh ? close > swing.y : close < swing.y
+                if swept
+                    swing.state := "swept"
+                    swing.sweepX := bar_index
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                array.set(swings, i, swing)
+            if swing.state == "swept"
+                closed = isHigh ? close > swing.y : close < swing.y
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                    array.set(swings, i, swing)
+            // Collect indices for visible swept/closed
+            if swing.state == "swept"
+                array.push(sweptIdx, i)
+            if swing.state == "closed_through"
+                array.push(closedIdx, i)
+        // Cap swept/closed shown (for display only)
+        sweptToShow = array.size(sweptIdx) > maxSweptSwings ? array.slice(sweptIdx, array.size(sweptIdx) - maxSweptSwings, array.size(sweptIdx)) : sweptIdx
+        closedToShow = array.size(closedIdx) > maxClosedSwings ? array.slice(closedIdx, array.size(closedIdx) - maxClosedSwings, array.size(closedIdx)) : closedIdx
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            showLine = false
+            lineColor = color(na)
+            style = line.style_solid
+            // Color and style by state and high/low
+            if swing.state == "active" and showActiveSwings
+                showLine := true
+                lineColor := isHigh ? activeHighColor : activeLowColor
+                style := activeSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "swept" and showSweptSwings and array.includes(sweptToShow, i)
+                showLine := true
+                lineColor := isHigh ? sweptHighColor : sweptLowColor
+                style := sweptSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "closed_through" and showClosedSwings and array.includes(closedToShow, i)
+                showLine := true
+                lineColor := isHigh ? closedHighColor : closedLowColor
+                style := closedSwingStyle == "dashed" ? line.style_dashed : closedSwingStyle == "dotted" ? line.style_dotted : line.style_solid
+            if showLine
+                x2 = swing.state == "active" ? bar_index : swing.state == "swept" ? swing.sweepX : swing.closedX
+                if na(swing.lineDrawing)
+                    swing.lineDrawing := line.new(x1=swing.xBar, y1=swing.y, x2=x2, y2=swing.y, color=lineColor, width=1, extend=extend.none, style=style)
+                else
+                    line.set_x2(swing.lineDrawing, x2)
+                    line.set_style(swing.lineDrawing, style)
+                    line.set_color(swing.lineDrawing, lineColor)
+                array.set(swings, i, swing)
+            else
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                    swing.lineDrawing := na
+                    array.set(swings, i, swing)
+
+if showActiveSwings or showSweptSwings or showClosedSwings
+    renderSwings(swingHighs, true)
+    renderSwings(swingLows, false)
+
+// === SETTINGS: FAIR VALUE GAPS (FVG) ===
+inputGroupFVG = "Fair Value Gap (FVG) Settings"
+showFVG = input.bool(true, "Show FVGs", group=inputGroupFVG, tooltip="Toggle the display of Fair Value Gaps (FVG) on the chart.")
+redrawFVGUnbalancedArea = input.bool(false, "Adjust FVG to Remaining Imbalance?", group=inputGroupFVG, tooltip="If enabled, the FVG box will shrink as price fills the imbalance, showing only the remaining unbalanced area.")
+removeMitigatedFVGDrawings = input.bool(true, "Remove Balanced FVGs", group=inputGroupFVG, tooltip="If enabled, FVG boxes will be removed from the chart once they are fully balanced (mitigated).")
+fvgColor = input.color(#2962FF, "FVG Color", group=inputGroupFVG, tooltip="Color for Fair Value Gap boxes.")
+var int maxImbalances = 200
+
+// === FVG TYPE & ARRAYS ===
+type FVG
+    int xLow
+    int xHigh
+    int xLowTime
+    int xHighTime
+    float yLow
+    float yHigh
+    int mitigatedTime
+    float unmitigatedY = 0.0
+    bool mitigated = false
+    box fvgBox = na
+
+var FVG[] BISIs = array.new<FVG>()
+var FVG[] SIBIs = array.new<FVG>()
+
+// === FVG HELPERS ===
+cleanupFVGs(array<FVG> fvgArray) =>
+    while array.size(fvgArray) > maxImbalances
+        fvg = array.shift(fvgArray)
+        if not na(fvg.fvgBox)
+            box.delete(fvg.fvgBox)
+
+renderFVGs(array<FVG> fvgs, color boxColor, bool isBullish) =>
+    if array.size(fvgs) > 0
+        for i = 0 to array.size(fvgs) - 1
+            fvg = array.get(fvgs, i)
+            // Only render if within lookback window
+            if bar_index - fvg.xLow <= lookbackBars or bar_index - fvg.xHigh <= lookbackBars
+                prevUnmitigatedY = fvg.unmitigatedY == 0 ? (isBullish ? fvg.yHigh : fvg.yLow) : fvg.unmitigatedY
+                if not fvg.mitigated
+                    mitigatedY = isBullish ? low <= prevUnmitigatedY : high >= prevUnmitigatedY
+                    if mitigatedY
+                        fvg.unmitigatedY := isBullish ? low : high
+                    fullyMitigated = isBullish ? fvg.unmitigatedY <= fvg.yLow : fvg.unmitigatedY >= fvg.yHigh
+                    if fullyMitigated
+                        fvg.mitigatedTime := time
+                        fvg.mitigated := true
+                        fvg.unmitigatedY := prevUnmitigatedY
+                boxRightTime = time + (time - time[2])
+                if na(fvg.fvgBox)
+                    boxLeftTime = isBullish ? fvg.xLowTime : fvg.xHighTime
+                    fillColor = color.new(boxColor, 80)
+                    fvg.fvgBox := box.new(xloc = xloc.bar_time, left = boxLeftTime, right = boxRightTime, top = fvg.yHigh, bottom = fvg.yLow, border_color = fillColor, bgcolor = fillColor)
+                else
+                    box.set_right(fvg.fvgBox, fvg.mitigated ? fvg.mitigatedTime : boxRightTime)
+                    if redrawFVGUnbalancedArea
+                        if isBullish
+                            box.set_top(fvg.fvgBox, fvg.unmitigatedY)
+                        else
+                            box.set_bottom(fvg.fvgBox, fvg.unmitigatedY)
+                if removeMitigatedFVGDrawings and fvg.mitigated
+                    box.delete(fvg.fvgBox)
+                array.set(fvgs, i, fvg)
+
+// === FVG DETECTION ===
+if barstate.isconfirmed
+    bisiFVG = high[2] < low
+    sibiFVG = low[2] > high
+    if bisiFVG
+        bisi = FVG.new()
+        bisi.xLow := bar_index[2]
+        bisi.xHigh := bar_index
+        bisi.xLowTime := time[2]
+        bisi.xHighTime := time
+        bisi.yLow := high[2]
+        bisi.yHigh := low
+        array.push(BISIs, bisi)
+    if sibiFVG
+        sibi = FVG.new()
+        sibi.xLow := bar_index
+        sibi.xHigh := bar_index[2]
+        sibi.xLowTime := time
+        sibi.xHighTime := time[2]
+        sibi.yLow := high
+        sibi.yHigh := low[2]
+        array.push(SIBIs, sibi)
+    cleanupFVGs(BISIs)
+    cleanupFVGs(SIBIs)
+    if showFVG
+        renderFVGs(BISIs, fvgColor, true)
+        renderFVGs(SIBIs, fvgColor, false)
