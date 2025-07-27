@@ -55,8 +55,18 @@ A Pine Script v6 indicator implementing various ICT (Inner Circle Trader) concep
 
 ### 🎯 Priority 1: CISD (Change in State of Delivery)
 - **High Priority**: Most important PD array for trading strategy
-- **Challenge**: Complex implementation requiring precise logic
-- **Status**: Planning phase - needs detailed specification
+- **Definition**: Candle(s) that sweep liquidity + close through opening price of sweep candles
+- **Logic**: 
+  - **Bearish CISD**: Upclose candles sweep swing high → downclose closes below lowest opening price
+  - **Bullish CISD**: Downclose candles sweep swing low → upclose closes above highest opening price
+- **Components**: CISD level (horizontal line) + Order Block (sweep candle series)
+- **Status**: 🚧 Ready to implement core detection
+
+### 🎯 Future CISD Enhancements
+- **Secondary Order Blocks**: During distribution/retracement phases
+- **Directional Filtering**: User preference for bullish/bearish only
+- **Bias Integration**: Daily/session bias for auto-filtering
+- **Consolidation Detection**: Distinguish true OBs from false signals
 
 ### 🎯 Future Considerations
 - Order Blocks detection
@@ -107,9 +117,26 @@ A Pine Script v6 indicator implementing various ICT (Inner Circle Trader) concep
 4. **Visual differentiation**: Line styles > color variety
 
 ### CISD Implementation Challenges
-- **Definition complexity**: Needs precise specification
-- **Performance considerations**: Must maintain current efficiency
-- **Visual integration**: Must work with existing color scheme
+- **Sweep Detection**: Must detect when price touches/wicks swing levels (stop loss trigger)
+- **Series Identification**: Track consecutive same-direction candles using open/close relationship
+- **Order Block Storage**: Store entire sweep candle series for future features
+- **Performance**: Maintain efficiency while tracking complex relationships
+- **Visual Integration**: Blue horizontal lines for CISD levels (matching existing theme)
+
+### CISD Technical Specification
+**Core Logic Flow:**
+1. **Monitor Swept Swings**: Use existing swing state tracking
+2. **Identify Sweep Series**: Group consecutive candles in sweep direction
+3. **Calculate CISD Level**: Extreme opening price of sweep series
+4. **Detect Trigger**: Opposite direction close through CISD level
+5. **Create Order Block**: Store sweep series + CISD level + visual line
+
+**Data Requirements:**
+- Reference to swept swing point
+- Start/end bars of sweep series
+- CISD level (opening price)
+- Trigger confirmation
+- Visual line object
 
 ### For New AI Conversations
 When working on this indicator:
@@ -129,7 +156,13 @@ When working on this indicator:
 - **Version**: Pine Script v6
 - **Status**: ✅ Stable and functional
 - **Last Major Update**: Swing point rendering fixes + FVG cleanup
-- **Ready for**: CISD implementation
+- **Current Task**: 🚧 Implementing core CISD detection
+- **Next Steps**: 
+  1. Add CISD type definition
+  2. Implement sweep detection logic
+  3. Add CISD level calculation
+  4. Create visual rendering
+  5. Test and validate
 
 ---
 *This indicator is a work in progress. Current features are stable and tested. Future features will be implemented incrementally with proper version control.*
