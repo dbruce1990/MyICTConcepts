@@ -57,19 +57,21 @@ I am developing an ICT (Inner Circle Trader) concepts indicator in Pine Script v
 - `DEVELOPMENT_GUIDELINES.md`: Technical best practices and recurring issue solutions
 - `TRADING_SYSTEM_DOCS.md`: Complete methodology documentation
 
-## Development Status & Priorities
+## Development Status & Current Implementation
 
 ### Completed ✅
-- Core swing point detection with state tracking
-- FVG detection (BISI/SIBI patterns) with mitigation tracking
-- CISD detection watching most recent swept swing only
-- Comprehensive reference documentation with official TradingView links
-- Development guidelines capturing recurring technical issues
+- **Core Foundation**: Swing points, FVGs, CISD detection functional (495 lines in script.pine)
+- **Reference System**: Complete documentation with official TradingView links
+- **Development Framework**: Guidelines and custom instructions established
+- **Swing Point Detection**: State tracking with proper identification
+- **FVG Detection**: BISI/SIBI patterns with mitigation tracking
+- **CISD Detection**: Watching most recent swept swing only
+- **Documentation**: Comprehensive reference materials with official sources
 
 ### Current Focus 🚧
 - HTF integration using ICT HTF Candles methodology
 - Multi-timeframe bias calculation using TTrades Daily Bias logic
-- C2 detection within HTF period boundaries
+- C2 detection within HTF period boundaries  
 - Statistical tracking and validation systems
 
 ### Next Phases 🎯
@@ -78,14 +80,69 @@ I am developing an ICT (Inner Circle Trader) concepts indicator in Pine Script v
 - Projection system for future price targets
 - Complete automation with customizable timeframe pairings
 
+### Implementation Insights
+- **Multi-timeframe Hierarchy**: Weekly→4hr→15m→1m with HTF bias providing LTF confirmation
+- **HTF Integration**: Higher timeframe provides bias/targets, lower timeframe provides execution signals
+- **Statistical Foundation**: TTrades Daily Bias provides mechanical bias calculation (PCH/PCL methodology)
+- **Label Progression**: Gray (valid) → Red (failed) → Orange (consolidation) from TTrades Fractal Model
+
 ## TTrades Methodology Foundation
 
-### The Fractal Model Logic
+### The Fractal Model Logic (Core Framework)
+**Philosophy**: "Price alternates between large and small ranges. Expansion occurs when price moves consistently in one direction with momentum."
+
+**Framework Components**:
 1. **Cyclical Nature**: Price alternates between large and small ranges
 2. **Expansion Mechanics**: Occurs with directional momentum 
 3. **HTF + LTF Integration**: HTF closures + LTF CISD = Expansion moments
 4. **Non-repainting**: Stable levels within time periods
 5. **Universal Application**: Works across assets, markets, timeframes
+
+**Key Insight**: This entire system is built around the fractal nature of markets - the same patterns repeat across all timeframes.
+
+### Next Candle Model (Statistical Foundation)
+**Definition**: Statistical price action model predicting next candle direction based on current behavior relative to previous candle.
+
+**TTrades Mechanical Rules** (from actual implementation):
+```
+if close[1] > previous_high:
+    bias = 1 (target previous high again)
+else if close[1] < previous_low:
+    bias = -1 (target previous low again)  
+else if failed_to_close_above_previous_high:
+    bias = -1 (bias previous low)
+else if failed_to_close_below_previous_low:
+    bias = 1 (bias previous high)
+else if inside_bar:
+    bias = inherit from previous candle direction
+else:
+    bias = 0 (outside bar, no bias)
+```
+
+**Statistical Tracking** (automated in TTrades code):
+- Success Rate: How often price hits targeted level (63-67% success rates)
+- Close Through Rate: How often price closes through after hitting
+- Sample Size: Number of times each bias was assigned
+- Real-time color coding: Blue (active) → Red (hit)
+
+### Candle 2 Closure (C2) - Core Fractal Pattern
+**Definition**: C2 IS the Next Candle Model in action - the specific pattern indicating swing formation beginning.
+
+**TTrades C2 Logic**:
+1. **Candle 1**: Establishes direction (upclose/downclose)
+2. **Candle 2**: Tests previous candle's extremes but closes back inside
+3. **Candle 3**: Anticipated swing completion
+
+**Critical Understanding**: C2 is not separate from Next Candle Model - it's the visual manifestation of bias prediction. When C2 forms, we anticipate C3 (swing completion) in direction opposite to the sweep.
+
+### CISD (Change in State of Delivery)
+**TTrades Definition**: The moment when orderflow changes direction, confirmed by closing through opening prices of delivery candles.
+
+**Implementation**:
+- **Series Identification**: Find consecutive candles that created the high/low
+- **Opening Price Levels**: Mark opening prices of these "delivery" candles  
+- **State Change**: When price closes through these openings in opposite direction
+- **Order Block Formation**: CISD creates order blocks and protected swing points
 
 ### Bias Assignment Rules (Mechanical)
 - Close Above PDH → Bias PDH

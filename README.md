@@ -1,61 +1,83 @@
-# ICT Concepts Indicator
+# ICT Concepts Trading System
 
-A Pine Script v6 indicator implementing various ICT (Inner Circle Trader) concepts for market structure analysis on TradingView.
+A comprehensive Pine Script v6 indicator that recreates the commercial **TTrades Fractal Model** with personal enhancements, focusing on multi-timeframe CISD detection and automated C2/C3/C4 labeling.
 
-## 🎯 Current Features (Working & Stable)
+## 🎯 Project Goal
 
-### ✅ Swing Point Detection & Tracking
-- **3-bar pivot detection** for swing highs and lows
-- **State tracking**: Active → Swept → Closed-Through
-- **Visual differentiation**: Line styles (solid, dashed, dotted) and colors
-- **Performance optimized**: Array capping to prevent overflow
-- **Configurable display limits**: Max swept/closed swings shown
+Recreate the $200+ TTrades Fractal Model indicator as an **open-source, enhanced version** with:
+- Multi-timeframe bias calculation using statistical validation
+- Automated C2/C3/C4 detection with Gray→Red→Orange progression
+- CISD (Change in State of Delivery) detection within HTF context
+- Complete mechanical trading system with 63-67% statistical edge
 
-### ✅ Fair Value Gaps (FVG)
-- **BISI** (Bullish Imbalance, Sell-side Inefficiency) detection
-- **SIBI** (Sell-side Imbalance, Buy-side Inefficiency) detection
-- **Mitigation tracking**: Partial and full gap fills
-- **Dynamic sizing**: Option to shrink boxes as gaps get filled
-- **Auto-cleanup**: Remove fully mitigated FVGs
+## 🚀 Current Status
 
-### ✅ Color Scheme & Visual Design
-- **Black swing lines**: No conflict with other PD arrays
-- **Blue FVG boxes**: Distinct from CISD/Order Block indicators
-- **Professional appearance**: Clean, minimal color palette
+- ✅ **Core Foundation**: 495-line functional indicator with swing points, FVGs, and CISD detection
+- ✅ **Reference System**: Complete documentation of source indicators with TradingView links
+- 🚧 **HTF Integration**: Implementing multi-timeframe period detection and bias calculation
+- 🎯 **Target**: Fully automated C2 detection with TTrades Fractal Model feature parity
 
-## 🎛️ Settings & Configuration
+## 🔗 Reference Indicators
 
-### Swing Point Settings
-- Show/hide different swing states
-- Customize colors for each state
-- Adjust line styles (solid, dashed, dotted)
-- Control memory usage (max swing points stored)
-- Set display window (bars to show)
+### Open Source Foundations
+- **[TTrades Daily Bias](https://www.tradingview.com/script/xdwgV3Fx-TTrades-Daily-Bias-TFO/)**: Mechanical bias system with statistical tracking
+- **[ICT HTF Candles](https://www.tradingview.com/script/0KTDWTdN-ICT-HTF-Candles-Source-Code-fadi/)**: Multi-timeframe visualization and period detection
 
-### FVG Settings
-- Toggle FVG display
-- Adjust to remaining imbalance option
-- Remove balanced FVGs option
-- Customize FVG color
+### Commercial Target  
+- **[TTrades Fractal Model](https://www.tradingview.com/script/XdwK9qQQ-Fractal-Model-Pro-TTrades/)**: $200+ indicator we're recreating with enhancements
 
-## 🔧 Technical Implementation
+## 📁 Project Structure
 
-### Performance Optimizations
-- **Bulletproof array capping**: Prevents memory overflow
-- **Lookback window limiting**: Only processes recent bars
-- **Efficient rendering**: Only draws what's needed
-- **Memory management**: Automatic cleanup of old objects
+```
+├── script.pine                     # Main indicator (495 lines, functional)
+├── .github/copilot-instructions.md # Complete project context for AI assistance  
+├── DEVELOPMENT_GUIDELINES.md       # Pine Script standards and recurring issue solutions
+└── Reference_Indicators/           # Complete source analysis and documentation
+    ├── TTrades_Daily_Bias/         # Mechanical bias calculation system
+    ├── Period_Separator/           # HTF visualization framework  
+    └── TTrades_Fractal_Model/      # Target system documentation and HTF candles
+```
 
-### Pine Script v6 Compliance
-- Uses proper Pine Script v6 syntax
-- Type-safe implementations
-- Follows Pine Script best practices
+## 🧠 Core Concepts
 
-## 🚧 Planned Features (Roadmap)
+### TTrades Methodology
+- **Fractal Nature**: Same patterns repeat across all timeframes
+- **C2 Detection**: HTF candle close triggering expansion moments
+- **CISD Integration**: Order block formation via swing point opening price violations
+- **Statistical Edge**: 63-67% success rates using PCH/PCL bias logic
 
-### 🎯 Priority 1: CISD (Change in State of Delivery)
-- **High Priority**: Most important PD array for trading strategy
-- **Definition**: Candle(s) that sweep liquidity + close through opening price of sweep candles
+### Multi-Timeframe Hierarchy
+- **Weekly→4hr**: HTF bias and structural levels
+- **4hr→15m**: Intermediate confirmation and timing
+- **15m→1m**: Precise entry execution with CISD confirmation
+
+## ⚡ Technical Standards
+
+- **Pine Script v6**: 4-space indentation (never tabs)
+- **Drawing Limits**: Always set max counts with cleanup procedures
+- **Array Safety**: Bounds checking before all array.get() calls  
+- **Documentation**: Comprehensive context preservation for development continuity
+
+## 🛠️ Development Workflow
+
+This project is designed for **seamless development continuation** across machines and conversations:
+
+1. **`.github/copilot-instructions.md`** provides complete project context to any AI assistant
+2. **`DEVELOPMENT_GUIDELINES.md`** prevents recurring technical issues
+3. **`Reference_Indicators/`** maintains organized source materials with official links
+4. **Comprehensive documentation** ensures no knowledge loss between development sessions
+
+## 🎯 Next Implementation Phase
+
+**HTF Integration** using ICT HTF Candles methodology:
+- Extract period detection logic for accurate HTF boundaries
+- Implement multi-timeframe bias calculation using TTrades Daily Bias rules
+- Add C2 detection within HTF period contexts
+- Create statistical tracking and validation systems
+
+---
+
+**Ready for development continuation on any machine - all context preserved in documentation.**
 - **Logic**: 
   - **Bearish CISD**: Upclose candles sweep swing high → downclose closes below lowest opening price
   - **Bullish CISD**: Downclose candles sweep swing low → upclose closes above highest opening price
