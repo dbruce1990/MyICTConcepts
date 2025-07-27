@@ -1,0 +1,74 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=5
+// © NotARobot_
+// Borrowed heavily from © DedreduPlessis "Period Separator All Timeframes"
+indicator("My Period Separator All Timeframes", overlay = true)
+
+// Inputs
+sepColorInput    = input.color(color.gray, "Separator Color")
+sepStyleInput    = input.string("Dotted", "Separator Style", options = ["Solid", "Dashed", "Dotted"])
+sepWidthInput    = input.int(1, "Separator Width", minval = 1)
+sepTimeframeInput = input.timeframe("1M", "Separator Timeframe")
+
+// HTF opening price line settings
+showHTFOpenLine  = input.bool(true, "Show HTF Opening Price")
+htfOpenPrice = request.security(syminfo.tickerid, sepTimeframeInput, open, lookahead = barmerge.lookahead_on)
+htfOpenLineColor    = input.color(color.gray, "HTF Opening Price Color")
+htfOpenLineWidth    = input.int(1, "HTF Opening Line Width", minval = 1)
+htfOpenLineStyle    = input.string("Dashed", "HTF Line Style", options = ["Solid", "Dashed", "Dotted"])
+
+// Create an array to store lines
+var line[] htfOpenPriceLines = array.new_line()
+
+// Function to get the line style
+getLineStyle(string input) =>
+    switch input
+        "Solid"  => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+
+// Function to draw the period separator
+drawPeriodSeparator(color color, string style, int width, string timeframe) =>
+    if timeframe.change(timeframe)
+        line.new(
+             x1     = bar_index,      // First bar index
+             y1     = high + syminfo.mintick,  // Top point of the line
+             x2     = bar_index,      // Second bar index (same for vertical line)
+             y2     = low,            // Bottom point of the line
+             extend = extend.both,    // Extends the line in both directions
+             color  = color,          // Color of the line
+             style  = getLineStyle(style), // Style of the line (dashed, dotted, etc.)
+             width  = width           // Width of the line
+         )
+
+// Draw the period separator based on the selected timeframe and visible on the same or lower timeframes
+if timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(sepTimeframeInput)
+    drawPeriodSeparator(sepColorInput, sepStyleInput, sepWidthInput, sepTimeframeInput)
+
+// Create a variable to store the bar index of the first candle in the period
+var int firstBarInPeriod = na
+
+// On the first bar of the period, store the current bar index for the open price line
+if (timeframe.change(sepTimeframeInput)) 
+    log.info(str.tostring(open))
+    if array.size(htfOpenPriceLines) > 0
+        // Update the last line's x2 to end at the current first bar of the new period
+        line.set_x2(array.get(htfOpenPriceLines, array.size(htfOpenPriceLines) - 1), bar_index)
+
+    // Create a new line for the current period and add it to the array
+    firstBarInPeriod := bar_index
+    newLine = line.new(
+         x1     = firstBarInPeriod,   // First bar of the period
+         y1     = htfOpenPrice,       // HTF opening price
+         x2     = bar_index,          // Starting as the first bar of the period for now
+         y2     = htfOpenPrice,       // HTF opening price
+         extend = extend.none,        // Do not extend beyond the current period
+         color  = htfOpenLineColor,
+         style  = getLineStyle(htfOpenLineStyle),
+         width  = htfOpenLineWidth
+     )
+    array.push(htfOpenPriceLines, newLine)  // Add the new line to the array
+
+// Ensure the current line continues to the latest bar
+if array.size(htfOpenPriceLines) > 0
+    line.set_x2(array.get(htfOpenPriceLines, array.size(htfOpenPriceLines) - 1), bar_index)  // Extend the current line to the latest bar

@@ -100,7 +100,7 @@ Since this is a paid indicator, we need to reverse-engineer:
 - **Website**: https://www.toodegrees.trade/ttfm
 - **Social**: X: @toodegrees, YouTube, Instagram channels
 - **Type**: Invite-only commercial indicator (paid access required)
-- **ICT_HTF_Candles_(fadi).pine**: Complete HTF visualization system with period detection, OHLC tracking, and imbalance detection
+- **ICT_HTF_Candles_fadi.pine**: Complete HTF visualization system with period detection, OHLC tracking, and imbalance detection
 - **ICT_HTF_Candles_README.md**: Detailed analysis of HTF implementation approach
 
 ## Implementation Status
