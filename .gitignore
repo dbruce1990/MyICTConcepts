@@ -1,5 +1,5 @@
-# VS Code settings
-.vscode/
+# VS Code project settings (allow .vscode/ for this project)
+# .vscode/
 
 # OS generated files
 .DS_Store

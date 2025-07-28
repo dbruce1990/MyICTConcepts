@@ -1,0 +1,65 @@
+{
+    "go.toolsManagement.autoUpdate": true,
+    "[nginx]": {
+
+        "editor.defaultFormatter": "ahmadalli.vscode-nginx-conf"
+    },
+    "json.maxItemsComputed": 500000,
+    "go.survey.prompt": false,
+    "[html]": {
+        "editor.defaultFormatter": "vscode.html-language-features"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "vscode.typescript-language-features"
+    },
+    "notebook.output.textLineLimit": 100,
+    "grammarly.config.documentDomain": "casual",
+    "grammarly.config.suggestions.OxfordComma": true,
+    "grammarly.config.suggestions.PassiveVoice": true,
+    "grammarly.files.include": [
+        "**/readme.md",
+        "**/README.md",
+        "**/*.txt",
+        "**/*.html",
+        "content/*.md"
+    ],
+    "grammarly.selectors": [
+
+    ],
+    "[css]": {
+        "editor.defaultFormatter": "vscode.css-language-features"
+    },
+    "material-ui-snippets.showNotesOnStartup": false,
+    "grammarly.config.documentDialect": "american",
+    "go.autocompleteUnimportedPackages": true,
+    "editor.accessibilitySupport": "off",
+    "remote.SSH.remotePlatform": {
+        "64.227.13.103": "linux",
+        "162.243.172.128": "linux"
+    },
+    "terminal.integrated.scrollback": 10000,
+    "editor.maxTokenizationLineLength": 200000,
+    "emmet.includeLanguages": {
+        "php": "html"
+    },
+    "liveServer.settings.donotVerifyTags": true,
+    "liveServer.settings.fullReload": true,
+    "jupyter.widgetScriptSources": [
+        "jsdelivr.com",
+        "unpkg.com"
+    ],
+    "[python]": {
+        "editor.formatOnType": true,
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "python.terminal.activateEnvironment": false,
+    "csv-edit.readOption_hasHeader": "true",
+    "debug.disassemblyView.showSourceCode": false,
+    "notebook.lineNumbers": "on",
+    "http.proxyAuthorization": null,
+    "http.proxySupport": "off",
+    "workbench.iconTheme": "material-icon-theme",
+    "github.copilot.nextEditSuggestions.enabled": true,
+    "[pinescript]": {}
+}
