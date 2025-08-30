@@ -144,6 +144,283 @@ if showActiveSwings or showSweptSwings or showClosedSwings
     renderSwings(swingHighs, true)
     renderSwings(swingLows, false)
 
+// === HTF CANDLE VISUALIZATION SYSTEM ===
+// Inspired by Period_Separator approach + Fadi's visual concepts
+
+// HTF Types
+type HTFCandle
+    float o
+    float c  
+    float h
+    float l
+    int start_bar
+    int end_bar
+    box body = na
+    line wick_up = na
+    line wick_down = na
+    label timer_label = na
+    label timer_label_below = na  // For Fadi style bottom label
+    bool is_complete = false
+
+// HTF Settings Group
+inputGroupHTF = "HTF Candle System"
+enableHTF = input.bool(true, "Enable HTF Candles", group=inputGroupHTF, tooltip="Display higher timeframe candles overlaid on the chart")
+htfTimeframe = input.timeframe("240", "HTF Timeframe", group=inputGroupHTF, tooltip="Higher timeframe for candle display")
+maxHTFCandles = input.int(5, "Max HTF Candles", minval=1, maxval=10, group=inputGroupHTF, tooltip="Maximum number of HTF candles to display")
+htfOffset = input.int(10, "HTF Offset", minval=5, maxval=50, group=inputGroupHTF, tooltip="Distance from current price action")
+htfCandleWidth = input.int(4, "HTF Candle Width", minval=2, maxval=8, group=inputGroupHTF, tooltip="Width of HTF candles (even numbers recommended for better wick centering)")
+
+// Period Separators (based on your Period_Separator approach)
+showPeriodSeps = input.bool(true, "Show Period Separators", group=inputGroupHTF, tooltip="Show vertical lines marking HTF period boundaries")
+sepColor = input.color(color.new(color.gray, 30), "Separator Color", group=inputGroupHTF)
+sepStyle = input.string("Dotted", "Separator Style", options=["Solid", "Dashed", "Dotted"], group=inputGroupHTF)
+sepWidth = input.int(1, "Separator Width", minval=1, maxval=3, group=inputGroupHTF)
+
+// HTF Visual Settings  
+htfBullBodyColor = input.color(color.new(color.green, 20), "Bull Body Color", group=inputGroupHTF)
+htfBearBodyColor = input.color(color.new(color.red, 20), "Bear Body Color", group=inputGroupHTF)
+htfBullBorderColor = input.color(color.green, "Bull Border Color", group=inputGroupHTF)
+htfBearBorderColor = input.color(color.red, "Bear Border Color", group=inputGroupHTF)
+htfBullWickColor = input.color(color.green, "Bull Wick Color", group=inputGroupHTF)
+htfBearWickColor = input.color(color.red, "Bear Wick Color", group=inputGroupHTF)
+
+// Timer Settings
+showTimer = input.bool(true, "Show HTF Timer", group=inputGroupHTF, tooltip="Show countdown to next HTF candle close")
+timerColor = input.color(color.gray, "Timer Color", group=inputGroupHTF)
+timerTextPosition = input.string("Above", "Timer Text Position", options=["Above", "Below"], group=inputGroupHTF, tooltip="Position timer text above or below the HTF candles")
+timerTextSize = input.string("Normal", "Timer Text Size", options=["Small", "Normal", "Large"], group=inputGroupHTF, tooltip="Size of the timer text")
+
+// Arrays and Variables
+var array<HTFCandle> htfCandles = array.new<HTFCandle>()
+var array<line> periodSeparators = array.new<line>()
+
+// Helper Functions
+getLineStyle(style) =>
+    switch style
+        "Solid" => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_dotted
+
+// Convert timeframe to readable format (240 → 4H, 60 → 1H, etc.)
+getReadableTimeframe(tf) =>
+    tfMinutes = timeframe.in_seconds(tf) / 60
+    switch
+        tfMinutes >= 1440 => str.tostring(tfMinutes / 1440) + "D"
+        tfMinutes >= 60 => str.tostring(tfMinutes / 60) + "H"
+        tfMinutes >= 1 => str.tostring(tfMinutes) + "m"
+        => tf
+
+// HTF Period Detection (hybrid approach: Fadi's accuracy + Mr_Rakun's elegance)
+HTFBarTime = time(htfTimeframe, 'America/New_York')
+isNewHTFPeriod = ta.change(HTFBarTime) > 0
+
+// Create Period Separator
+if enableHTF and showPeriodSeps and isNewHTFPeriod
+    if timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(htfTimeframe)
+        separator = line.new(x1=bar_index, y1=high * 1.001, x2=bar_index, y2=low * 0.999, extend=extend.both, color=sepColor, style=getLineStyle(sepStyle), width=sepWidth)
+        array.push(periodSeparators, separator)
+        
+        // Cleanup old separators
+        if array.size(periodSeparators) > maxHTFCandles * 2
+            line.delete(array.shift(periodSeparators))
+
+// HTF Candle Management (hybrid: Fadi's accuracy + Mr_Rakun's methods)
+if enableHTF
+    // Create new HTF candle on period change (Mr_Rakun style condition)
+    if isNewHTFPeriod or (barstate.isconfirmed and array.size(htfCandles) == 0)
+        newCandle = HTFCandle.new(o=open, c=close, h=high, l=low, start_bar=bar_index, end_bar=bar_index, is_complete=false)
+        array.unshift(htfCandles, newCandle)
+        
+        // Mark previous candle as complete
+        if array.size(htfCandles) > 1
+            prevCandle = array.get(htfCandles, 1)
+            prevCandle.is_complete := true
+            array.set(htfCandles, 1, prevCandle)
+        
+        // Cleanup old candles
+        while array.size(htfCandles) > maxHTFCandles
+            oldCandle = array.pop(htfCandles)
+            if not na(oldCandle.body)
+                box.delete(oldCandle.body)
+            if not na(oldCandle.wick_up)
+                line.delete(oldCandle.wick_up)
+            if not na(oldCandle.wick_down)
+                line.delete(oldCandle.wick_down)
+            if not na(oldCandle.timer_label)
+                label.delete(oldCandle.timer_label)
+            if not na(oldCandle.timer_label_below)
+                label.delete(oldCandle.timer_label_below)
+    
+    // Update current HTF candle (Mr_Rakun style: update method pattern)
+    if array.size(htfCandles) > 0
+        currentCandle = array.first(htfCandles)
+        // Update high if current high exceeds candle high
+        if high > currentCandle.h
+            currentCandle.h := high
+        // Update low if current low is below candle low  
+        if low < currentCandle.l
+            currentCandle.l := low
+        // Always update close and end bar
+        currentCandle.c := close
+        currentCandle.end_bar := bar_index
+        array.set(htfCandles, 0, currentCandle)
+
+// HTF Candle Rendering (Mr_Rakun's clean approach + Fadi's accuracy)
+// HTF Candle Rendering (Mr_Rakun's clean approach + Fadi's accuracy)
+if enableHTF
+    // Full redraw only on last bar for performance
+    if barstate.islast
+        // Complete visual cleanup (Mr_Rakun style) - DON'T delete timer labels here
+        for i = 0 to math.min(array.size(htfCandles) - 1, maxHTFCandles - 1)
+            candle = array.get(htfCandles, i)
+            if not na(candle.body)
+                box.delete(candle.body)
+                candle.body := na
+            if not na(candle.wick_up)
+                line.delete(candle.wick_up)
+                candle.wick_up := na
+            if not na(candle.wick_down)
+                line.delete(candle.wick_down)
+                candle.wick_down := na
+            // Note: Timer labels are handled separately now
+            array.set(htfCandles, i, candle)
+        
+        // Redraw all candles (clean slate approach)
+        for i = 0 to math.min(array.size(htfCandles) - 1, maxHTFCandles - 1)
+            candle = array.get(htfCandles, i)
+            
+            // Calculate position (FIXED: reverse order so newest is leftmost)
+            candleBuffer = htfOffset + (htfCandleWidth + 2) * (maxHTFCandles - 1 - i)
+            leftX = bar_index + candleBuffer
+            rightX = leftX + htfCandleWidth
+            // SIMPLE MATHEMATICAL CENTER: Use the exact center of the span
+            wickCenterX = leftX + math.floor(htfCandleWidth / 2)
+            
+            // Determine candle colors
+            isBull = candle.c >= candle.o
+            bodyColor = isBull ? htfBullBodyColor : htfBearBodyColor
+            borderColor = isBull ? htfBullBorderColor : htfBearBorderColor
+            wickColor = isBull ? htfBullWickColor : htfBearWickColor
+            
+            // Create candle body (proper OHLC: top=higher of open/close, bottom=lower)
+            bodyTop = math.max(candle.o, candle.c)
+            bodyBottom = math.min(candle.o, candle.c)
+            candle.body := box.new(left=leftX, top=bodyTop, right=rightX, bottom=bodyBottom, border_color=borderColor, bgcolor=bodyColor, border_width=1)
+            
+            // Create wicks (proper centering and endpoints)
+            candle.wick_up := line.new(x1=wickCenterX, y1=candle.h, x2=wickCenterX, y2=bodyTop, color=wickColor, width=1)
+            candle.wick_down := line.new(x1=wickCenterX, y1=bodyBottom, x2=wickCenterX, y2=candle.l, color=wickColor, width=1)
+            
+            // Update candle in array
+            array.set(htfCandles, i, candle)
+
+// === HTF BIAS SYSTEM (C2/C3 Detection) ===
+// Based on TTrades Daily Bias methodology
+inputGroupBias = "HTF Bias Settings"
+enableBias = input.bool(true, "Enable HTF Bias Detection", group=inputGroupBias, tooltip="Enable C2/C3 detection for bias context")
+showBiasInfo = input.bool(true, "Show Bias Info", group=inputGroupBias, tooltip="Show current HTF bias in debug table")
+showBiasLabels = input.bool(true, "Show Bias Labels", group=inputGroupBias, tooltip="Show bias change labels on chart")
+biasLabelSize = input.string("Normal", "Bias Label Size", options=["Small", "Normal", "Large"], group=inputGroupBias)
+
+// HTF Bias Detection (from HTF candles)
+var string currentBias = "neutral"  // "bullish", "bearish", "neutral"
+var int biasChangeBar = na
+
+// C2/C3 Detection using HTF candles
+if enableBias and enableHTF and array.size(htfCandles) >= 2
+    if barstate.isconfirmed
+        currentCandle = array.get(htfCandles, 0)  // Most recent HTF candle
+        previousCandle = array.get(htfCandles, 1) // Previous HTF candle
+        
+        // Only check completed candles for bias changes
+        if currentCandle.is_complete and previousCandle.is_complete
+            // Previous candle's high/low for reference
+            prevHigh = previousCandle.h
+            prevLow = previousCandle.l
+            
+            // Current candle's close relative to previous extremes
+            currentClose = currentCandle.c
+            
+            // C2 Logic: Close relative to previous candle extremes
+            newBias = currentBias
+            
+            // Bearish C2: Previous candle high swept but closed back inside
+            if currentClose < prevHigh and currentCandle.h > prevHigh
+                newBias := "bearish"
+            
+            // Bullish C2: Previous candle low swept but closed back inside  
+            else if currentClose > prevLow and currentCandle.l < prevLow
+                newBias := "bullish"
+            
+            // Update bias if changed
+            if newBias != currentBias
+                currentBias := newBias
+                biasChangeBar := bar_index
+
+// === SEPARATE TIMER SYSTEM (Independent from main rendering) ===
+// PERFORMANCE: Only update timer on confirmed bars or when market is open
+if enableHTF and showTimer and array.size(htfCandles) > 0 and (barstate.isconfirmed or barstate.islast)
+    // FIRST: Clean up timer labels from ALL candles (including completed ones)
+    for i = 0 to array.size(htfCandles) - 1
+        candle = array.get(htfCandles, i)
+        if not na(candle.timer_label)
+            label.delete(candle.timer_label)
+            candle.timer_label := na
+        if not na(candle.timer_label_below)
+            label.delete(candle.timer_label_below)
+            candle.timer_label_below := na
+        array.set(htfCandles, i, candle)
+    
+    // THEN: Only create new timer labels for the current incomplete candle
+    currentCandle = array.first(htfCandles)
+    if not currentCandle.is_complete
+        
+        // Calculate fresh timer data
+        timeLeft = (time_close(htfTimeframe) - timenow) / 1000
+        readableTimeframe = getReadableTimeframe(htfTimeframe)
+        
+        timeText = if timeLeft > 0
+            hours = math.floor(timeLeft / 3600)
+            minutes = math.floor((timeLeft - hours * 3600) / 60)
+            seconds = math.floor(timeLeft - hours * 3600 - minutes * 60)
+            if hours > 0
+                str.format("{0}:{1,number,00}:{2,number,00}", hours, minutes, seconds)
+            else
+                str.format("{0}:{1,number,00}", minutes, seconds)
+        else
+            "Closed"
+        
+        // Fresh label positioning
+        textSize = switch timerTextSize
+            "Small" => size.small
+            "Normal" => size.normal
+            "Large" => size.large
+            => size.normal
+        
+        firstCandleX = bar_index + htfOffset + (htfCandleWidth + 2) * (maxHTFCandles - 1)
+        lastCandleX = bar_index + htfOffset + htfCandleWidth
+        centerX = math.round((firstCandleX + lastCandleX) / 2)
+        
+        highestPoint = currentCandle.h
+        lowestPoint = currentCandle.l
+        for j = 0 to math.min(array.size(htfCandles) - 1, maxHTFCandles - 1)
+            candleData = array.get(htfCandles, j)
+            highestPoint := math.max(highestPoint, candleData.h)
+            lowestPoint := math.min(lowestPoint, candleData.l)
+        
+        htfRange = highestPoint - lowestPoint
+        
+        // Create fresh labels every time
+        if timerTextPosition == "Above"
+            currentCandle.timer_label := label.new(x=centerX, y=highestPoint + htfRange * 0.12, text=readableTimeframe, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+            currentCandle.timer_label_below := label.new(x=centerX, y=highestPoint + htfRange * 0.06, text=timeText, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+        else
+            currentCandle.timer_label := label.new(x=centerX, y=lowestPoint - htfRange * 0.12, text=readableTimeframe, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+            currentCandle.timer_label_below := label.new(x=centerX, y=lowestPoint - htfRange * 0.06, text=timeText, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+        
+        array.set(htfCandles, 0, currentCandle)
+
 // === SETTINGS: FAIR VALUE GAPS (FVG) ===
 inputGroupFVG = "Fair Value Gap (FVG) Settings"
 showFVG = input.bool(true, "Show FVGs", group=inputGroupFVG, tooltip="Toggle the display of Fair Value Gaps (FVG) on the chart.")
@@ -301,13 +578,12 @@ if showCISD
                 array.set(bullishCISDs, i, cisd)
 
 // Only create new CISDs on confirmed bars to avoid false signals
-if barstate.isconfirmed and showCISD
+if barstate.isconfirmed and showCISD and enableBias
     
-    // Now check for new CISDs based on swept swings
-    // The mechanical approach: When swing gets swept, identify the candle series that did the sweeping
+    // Only create CISDs when HTF bias supports the direction
     
     // Check bearish CISDs (sweep highs with upclose candles, then close below lowest opening)
-    if showBearishCISD and array.size(swingHighs) > 0
+    if showBearishCISD and currentBias == "bearish" and array.size(swingHighs) > 0
         // Find the most recently swept swing high
         mostRecentSweptIndex = -1
         mostRecentSweepBar = -1
@@ -341,7 +617,7 @@ if barstate.isconfirmed and showCISD
                     continueLoop := false
             
             // Check if current candle closes below the lowest opening price from the sweep series
-            if close < open and close < lowestOpen
+            if close < lowestOpen
                 // Check if we haven't already created a CISD for this setup
                 alreadyExists = false
                 if array.size(bearishCISDs) > 0
@@ -356,18 +632,18 @@ if barstate.isconfirmed and showCISD
                     cisd = CISD.new()
                     cisd.swingIndex := mostRecentSweptIndex
                     cisd.isBearish := true
-                    cisd.startBar := bar_index - sweepStart  // Convert to absolute bar index
-                    cisd.endBar := bar_index - sweepEnd      // Convert to absolute bar index
-                    cisd.startTime := time[bar_index - sweepStart]
-                    cisd.endTime := time[bar_index - sweepEnd]
+                    cisd.startBar := bar_index - sweepStart  // Convert relative to absolute
+                    cisd.endBar := bar_index - sweepEnd      // Convert relative to absolute
+                    cisd.startTime := time[sweepStart]       // Use relative index for time lookup
+                    cisd.endTime := time[sweepEnd]           // Use relative index for time lookup
                     cisd.cisdLevel := lowestOpen
                     cisd.triggerBar := bar_index
                     cisd.triggerTime := time
                     cisd.isActive := true
                     array.push(bearishCISDs, cisd)
     
-    // Check bullish CISDs (sweep lows with downclose candles, then close above highest opening)  
-    if showBullishCISD and array.size(swingLows) > 0
+    // Check bullish CISDs (sweep lows with downclose candles, then close above highest opening)
+    if showBullishCISD and currentBias == "bullish" and array.size(swingLows) > 0
         // Find the most recently swept swing low
         mostRecentSweptIndex = -1
         mostRecentSweepBar = -1
@@ -401,7 +677,7 @@ if barstate.isconfirmed and showCISD
                     continueLoop := false
             
             // Check if current candle closes above the highest opening price from the sweep series
-            if close > open and close > highestOpen
+            if close > highestOpen
                 // Check if we haven't already created a CISD for this setup
                 alreadyExists = false
                 if array.size(bullishCISDs) > 0
@@ -416,10 +692,10 @@ if barstate.isconfirmed and showCISD
                     cisd = CISD.new()
                     cisd.swingIndex := mostRecentSweptIndex
                     cisd.isBearish := false
-                    cisd.startBar := bar_index - sweepStart  // Convert to absolute bar index
-                    cisd.endBar := bar_index - sweepEnd      // Convert to absolute bar index
-                    cisd.startTime := time[bar_index - sweepStart]
-                    cisd.endTime := time[bar_index - sweepEnd]
+                    cisd.startBar := bar_index - sweepStart  // Convert relative to absolute
+                    cisd.endBar := bar_index - sweepEnd      // Convert relative to absolute
+                    cisd.startTime := time[sweepStart]       // Use relative index for time lookup
+                    cisd.endTime := time[sweepEnd]           // Use relative index for time lookup
                     cisd.cisdLevel := highestOpen
                     cisd.triggerBar := bar_index
                     cisd.triggerTime := time

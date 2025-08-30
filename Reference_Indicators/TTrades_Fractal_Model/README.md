@@ -86,13 +86,33 @@ This is our target implementation - the commercial indicator we're recreating wi
 - Performance tuning
 - Visual customization options
 
+## Latest Official Features (February 2025)
+
+### New Features
+- **Previous Candle EQ**: Enhanced equilibrium calculation
+- **Custom Model Timeframes**: User-defined timeframe pairings beyond automatic
+- **Wick Projections**: Anticipated wick formation points (T-Spot refinement)
+- **Timezone for Time Filter**: Global timezone support for filtering
+- **Bullish/Bearish CISD Options**: Directional bias control
+- **On Chart Info Option**: Customizable information display
+- **Asset and Timeframe Display**: Context information in info table
+
+### Performance Improvements  
+- **10x Speed Improvement**: Optimized loading (2-3 seconds)
+- **Memory Optimization**: All allocated memory runtime errors resolved
+- **Lookback Optimization**: All lookback runtime errors resolved
+- **Alert System**: All calculation errors resolved
+- **Floating Drawings Removed**: Cleaner visual implementation
+- **T-Spot Refinement**: Enhanced accuracy in wick anticipation
+
 ## Missing Information
 Since this is a paid indicator, we need to reverse-engineer:
-- Exact C2 detection algorithm
-- Precise CISD timing rules
-- T-Spot calculation methodology
-- Projection formula
-- Alert conditions
+- Exact C2 detection algorithm within HTF periods
+- Precise CISD timing rules and opening price violation logic
+- T-Spot calculation methodology for wick anticipation
+- Projection formula for delivery/rebalance levels [-1, -2, -2.5, -4, -4.5]
+- Alert conditions and barstate handling
+- Custom timeframe pairing validation logic
 
 ## Reference Links
 - **Official TradingView Page**: https://www.tradingview.com/script/XdwK9qQQ-Fractal-Model-Pro-TTrades/
@@ -105,5 +125,5 @@ Since this is a paid indicator, we need to reverse-engineer:
 
 ## Implementation Status
 - **Indicator Type**: Invite-only commercial indicator (paid access required)
-- **Latest Updates**: February 2025 - Performance optimizations, custom model timeframes, wick projections
-- **Key Improvements**: 10x speed improvement, timezone support, floating drawings removal
+- **Latest Updates**: February 11, 2025 - Custom model timeframes, wick projections, timezone support
+- **Key Improvements**: 10x speed improvement, floating drawings removal, T-Spot refinement

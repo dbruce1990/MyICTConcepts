@@ -50,8 +50,31 @@ if condition
 **Solution**:
 - Use `barstate.isconfirmed` for final calculations
 - Use `barstate.islast` for current bar updates
-- Use `barstate.isrealtime` for live trading scenarios
+- Use `barstate.isrealtime` for live trading scenarios (but note: limited execution frequency)
 - Avoid heavy calculations on every tick
+
+### 5. Real-Time Update Limitations (NEW)
+**Problem**: Timers and real-time displays lag or "stick" at certain values
+**Solution**: 
+- Pine Script only executes when market activity occurs (ticks)
+- Cannot force execution every second - limited by market data flow
+- For maximum update frequency: Remove `barstate` conditions and execute every cycle
+- Accept that some lag during quiet market periods is unavoidable
+
+### 6. Drawing Coordinate System (NEW)
+**Problem**: Wick centering issues with odd-width candle bodies
+**Solution**:
+- Use even numbers for candle widths (2, 4, 6, 8) for better centering
+- For mathematical centering: `wickCenterX = leftX + math.floor(width / 2)`
+- Pine Script's box coordinates work differently than expected for width calculations
+- Test centering visually for each use case
+
+### 7. Label Cleanup (NEW) 
+**Problem**: Timer labels persist after candles complete, causing visual clutter
+**Solution**:
+- Implement comprehensive cleanup that affects ALL objects, not just current ones
+- Delete and recreate labels every cycle rather than trying to update in place
+- Separate timer logic from main rendering to avoid interference
 
 ## Code Organization Best Practices
 
@@ -86,6 +109,34 @@ if condition
 - Delete objects that are no longer needed
 - Use conditional rendering based on user settings
 - Batch drawing operations when possible
+
+## Trading System Constraints
+
+### 1. Timeframe Limitations (Critical for HTF Integration)
+**Pine Script Constraint**: Can only request HIGHER timeframe data, not lower
+- From 15m chart: Can get 4hr/daily/weekly data, but NOT 1m data
+- From 4hr chart: Can get daily/weekly data, but NOT 1hr/15m data
+- **Impact**: Shapes our HTF integration approach - must design around this limitation
+- **Solution**: Design flexible timeframe pairing where HTF is always higher than current chart
+
+### 2. User Trading Preferences (Design Requirements)
+**Setup Preferences**: 
+- Primary: Setups after swept swing points (highest priority)
+- Secondary: Setups inside Fair Value Gaps
+- Avoid: Random setups without key level context
+
+**Timeframe Usage Patterns**:
+- Standard hierarchy: Weekly→4hr→15m→1m
+- Alternative for noisy conditions: 30m→3m
+- HTF provides bias/targets, LTF provides execution signals
+- Period separators are essential (not optional) for workflow
+
+**Quality Requirements**:
+- Filter out noise, focus only on high-probability setups
+- Statistical validation required (like TTrades provides with 63-67% success rates)
+- Mechanical approach preferred over discretionary
+
+### 3. Drawing Object Management
 
 ## Debugging Strategies
 

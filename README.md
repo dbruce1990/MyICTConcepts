@@ -12,10 +12,11 @@ Recreate the $200+ TTrades Fractal Model indicator as an **open-source, enhanced
 
 ## 🚀 Current Status
 
-- ✅ **Core Foundation**: 495-line functional indicator with swing points, FVGs, and CISD detection
+- ✅ **Core Foundation**: 500+ line functional indicator with swing points, FVGs, and CISD detection
 - ✅ **Reference System**: Complete documentation of source indicators with TradingView links
-- 🚧 **HTF Integration**: Implementing multi-timeframe period detection and bias calculation
-- 🎯 **Target**: Fully automated C2 detection with TTrades Fractal Model feature parity
+- 🚧 **HTF Integration**: Next critical phase - implementing period separators and timeframe detection
+- 🎯 **Priority**: Period separators are vital for user's trading workflow (highest priority)
+- 🎯 **Target**: Fully automated C2 detection within HTF context with statistical validation
 
 ## 🔗 Reference Indicators
 
