@@ -1,0 +1,1 @@
+This script was our starting point before working together. Swing points were working seemingly well, though we've improved on it a bit since. FVG detection, mitigation, and removal and all that seemed to work pretty good as well. 

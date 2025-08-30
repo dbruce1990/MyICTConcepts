@@ -1,0 +1,729 @@
+//@version=6
+indicator("ICT Cursor", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=5000)
+
+// === SWING POINT TYPE & ARRAYS ===
+type SwingPoint
+    int xBar
+    int xTime
+    float y
+    string state // "active", "swept", "closed_through"
+    int sweepX
+    int closedX
+    line lineDrawing = na
+
+var swingHighs = array.new<SwingPoint>()
+var swingLows = array.new<SwingPoint>()
+
+// === SWING POINT SETTINGS ===
+inputGroupSwings = "Swing Point Settings"
+showActiveSwings = input.bool(true, "Show Active Swings", group=inputGroupSwings, tooltip="Show swing points that have not been swept or closed through.")
+showSweptSwings = input.bool(true, "Show Swept Swings", group=inputGroupSwings, tooltip="Show swing points that have been swept (wicked through) but not closed through.")
+maxSweptSwings = input.int(5, "Max Swept Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of swept swings to display.")
+showClosedSwings = input.bool(false, "Show Closed-Through Swings", group=inputGroupSwings, tooltip="Show swing points that have been closed through (break of structure). Useful for market structure analysis.")
+maxClosedSwings = input.int(3, "Max Closed Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of closed-through swings to display.")
+activeHighColor = input.color(color.black, "Active High Color", group=inputGroupSwings, tooltip="Color for active swing high lines.")
+activeLowColor = input.color(color.black, "Active Low Color", group=inputGroupSwings, tooltip="Color for active swing low lines.")
+sweptHighColor = input.color(color.black, "Swept High Color", group=inputGroupSwings, tooltip="Color for swept swing high lines.")
+sweptLowColor = input.color(color.black, "Swept Low Color", group=inputGroupSwings, tooltip="Color for swept swing low lines.")
+closedHighColor = input.color(#616161, "Closed High Color", group=inputGroupSwings, tooltip="Color for closed-through swing high lines.")
+closedLowColor = input.color(#616161, "Closed Low Color", group=inputGroupSwings, tooltip="Color for closed-through swing low lines.")
+activeSwingStyle = input.string("solid", "Active Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for active swings.")
+sweptSwingStyle = input.string("dashed", "Swept Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for swept swings.")
+closedSwingStyle = input.string("dotted", "Closed-Through Swing Style", options=["solid", "dashed", "dotted"], group=inputGroupSwings, tooltip="Line style for closed-through swings.")
+maxSwingPoints = input.int(100, "Max Swing Points Stored", minval=20, maxval=500, group=inputGroupSwings, tooltip="Maximum number of swing points to keep in memory. Older points will be removed for performance.")
+lookbackBars = input.int(500, "Bars to Display", minval=50, maxval=5000, group=inputGroupSwings, tooltip="Only show swing points from the last N bars.")
+
+// === BULLETPROOF ARRAY CAPPING ===
+while array.size(swingHighs) > maxSwingPoints
+    swing = array.shift(swingHighs)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+while array.size(swingLows) > maxSwingPoints
+    swing = array.shift(swingLows)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+
+// === SWING DETECTION (3-bar pivots) ===
+if barstate.isconfirmed
+    // Highs
+    if high[1] > high[0] and high[1] > high[2]
+        swing = SwingPoint.new()
+        swing.y := high[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingHighs, swing)
+    // Lows
+    if low[1] < low[0] and low[1] < low[2]
+        swing = SwingPoint.new()
+        swing.y := low[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingLows, swing)
+
+// === SWING RENDERING ===
+renderSwings(array<SwingPoint> swings, bool isHigh) =>
+    if array.size(swings) > 0
+        sweptIdx = array.new_int()
+        closedIdx = array.new_int()
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            // Only process/display if within lookback window
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            // Update state
+            if swing.state == "active"
+                swept = isHigh ? high > swing.y : low < swing.y
+                closed = isHigh ? close > swing.y : close < swing.y
+                if swept
+                    swing.state := "swept"
+                    swing.sweepX := bar_index
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                array.set(swings, i, swing)
+            if swing.state == "swept"
+                closed = isHigh ? close > swing.y : close < swing.y
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                    array.set(swings, i, swing)
+            // Collect indices for visible swept/closed
+            if swing.state == "swept"
+                array.push(sweptIdx, i)
+            if swing.state == "closed_through"
+                array.push(closedIdx, i)
+        // Cap swept/closed shown (for display only)
+        sweptToShow = array.size(sweptIdx) > maxSweptSwings ? array.slice(sweptIdx, array.size(sweptIdx) - maxSweptSwings, array.size(sweptIdx)) : sweptIdx
+        closedToShow = array.size(closedIdx) > maxClosedSwings ? array.slice(closedIdx, array.size(closedIdx) - maxClosedSwings, array.size(closedIdx)) : closedIdx
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            showLine = false
+            lineColor = color(na)
+            style = line.style_solid
+            // Color and style by state and high/low
+            if swing.state == "active" and showActiveSwings
+                showLine := true
+                lineColor := isHigh ? activeHighColor : activeLowColor
+                style := activeSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "swept" and showSweptSwings and array.includes(sweptToShow, i)
+                showLine := true
+                lineColor := isHigh ? sweptHighColor : sweptLowColor
+                style := sweptSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "closed_through" and showClosedSwings and array.includes(closedToShow, i)
+                showLine := true
+                lineColor := isHigh ? closedHighColor : closedLowColor
+                style := closedSwingStyle == "dashed" ? line.style_dashed : closedSwingStyle == "dotted" ? line.style_dotted : line.style_solid
+            if showLine
+                x2 = swing.state == "active" ? bar_index : swing.state == "swept" ? swing.sweepX : swing.closedX
+                if na(swing.lineDrawing)
+                    swing.lineDrawing := line.new(x1=swing.xBar, y1=swing.y, x2=x2, y2=swing.y, color=lineColor, width=1, extend=extend.none, style=style)
+                else
+                    line.set_x2(swing.lineDrawing, x2)
+                    line.set_style(swing.lineDrawing, style)
+                    line.set_color(swing.lineDrawing, lineColor)
+                array.set(swings, i, swing)
+            else
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                    swing.lineDrawing := na
+                    array.set(swings, i, swing)
+
+if showActiveSwings or showSweptSwings or showClosedSwings
+    renderSwings(swingHighs, true)
+    renderSwings(swingLows, false)
+
+// === HTF CANDLE VISUALIZATION SYSTEM ===
+// Inspired by Period_Separator approach + Fadi's visual concepts
+
+// HTF Types
+type HTFCandle
+    float o
+    float c  
+    float h
+    float l
+    int start_bar
+    int end_bar
+    box body = na
+    line wick_up = na
+    line wick_down = na
+    label timer_label = na
+    label timer_label_below = na  // For Fadi style bottom label
+    bool is_complete = false
+
+// HTF Settings Group
+inputGroupHTF = "HTF Candle System"
+enableHTF = input.bool(true, "Enable HTF Candles", group=inputGroupHTF, tooltip="Display higher timeframe candles overlaid on the chart")
+htfTimeframe = input.timeframe("240", "HTF Timeframe", group=inputGroupHTF, tooltip="Higher timeframe for candle display")
+maxHTFCandles = input.int(5, "Max HTF Candles", minval=1, maxval=10, group=inputGroupHTF, tooltip="Maximum number of HTF candles to display")
+htfOffset = input.int(10, "HTF Offset", minval=5, maxval=50, group=inputGroupHTF, tooltip="Distance from current price action")
+htfCandleWidth = input.int(4, "HTF Candle Width", minval=2, maxval=8, group=inputGroupHTF, tooltip="Width of HTF candles (even numbers recommended for better wick centering)")
+
+// Period Separators (based on your Period_Separator approach)
+showPeriodSeps = input.bool(true, "Show Period Separators", group=inputGroupHTF, tooltip="Show vertical lines marking HTF period boundaries")
+sepColor = input.color(color.new(color.gray, 30), "Separator Color", group=inputGroupHTF)
+sepStyle = input.string("Dotted", "Separator Style", options=["Solid", "Dashed", "Dotted"], group=inputGroupHTF)
+sepWidth = input.int(1, "Separator Width", minval=1, maxval=3, group=inputGroupHTF)
+
+// HTF Visual Settings  
+htfBullBodyColor = input.color(color.new(color.green, 20), "Bull Body Color", group=inputGroupHTF)
+htfBearBodyColor = input.color(color.new(color.red, 20), "Bear Body Color", group=inputGroupHTF)
+htfBullBorderColor = input.color(color.green, "Bull Border Color", group=inputGroupHTF)
+htfBearBorderColor = input.color(color.red, "Bear Border Color", group=inputGroupHTF)
+htfBullWickColor = input.color(color.green, "Bull Wick Color", group=inputGroupHTF)
+htfBearWickColor = input.color(color.red, "Bear Wick Color", group=inputGroupHTF)
+
+// Timer Settings
+showTimer = input.bool(true, "Show HTF Timer", group=inputGroupHTF, tooltip="Show countdown to next HTF candle close")
+timerColor = input.color(color.gray, "Timer Color", group=inputGroupHTF)
+timerTextPosition = input.string("Above", "Timer Text Position", options=["Above", "Below"], group=inputGroupHTF, tooltip="Position timer text above or below the HTF candles")
+timerTextSize = input.string("Normal", "Timer Text Size", options=["Small", "Normal", "Large"], group=inputGroupHTF, tooltip="Size of the timer text")
+
+// Arrays and Variables
+var array<HTFCandle> htfCandles = array.new<HTFCandle>()
+var array<line> periodSeparators = array.new<line>()
+
+// Helper Functions
+getLineStyle(style) =>
+    switch style
+        "Solid" => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_dotted
+
+// Convert timeframe to readable format (240 → 4H, 60 → 1H, etc.)
+getReadableTimeframe(tf) =>
+    tfMinutes = timeframe.in_seconds(tf) / 60
+    switch
+        tfMinutes >= 1440 => str.tostring(tfMinutes / 1440) + "D"
+        tfMinutes >= 60 => str.tostring(tfMinutes / 60) + "H"
+        tfMinutes >= 1 => str.tostring(tfMinutes) + "m"
+        => tf
+
+// HTF Period Detection (hybrid approach: Fadi's accuracy + Mr_Rakun's elegance)
+HTFBarTime = time(htfTimeframe, 'America/New_York')
+isNewHTFPeriod = ta.change(HTFBarTime) > 0
+
+// Create Period Separator
+if enableHTF and showPeriodSeps and isNewHTFPeriod
+    if timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(htfTimeframe)
+        separator = line.new(x1=bar_index, y1=high * 1.001, x2=bar_index, y2=low * 0.999, extend=extend.both, color=sepColor, style=getLineStyle(sepStyle), width=sepWidth)
+        array.push(periodSeparators, separator)
+        
+        // Cleanup old separators
+        if array.size(periodSeparators) > maxHTFCandles * 2
+            line.delete(array.shift(periodSeparators))
+
+// HTF Candle Management (hybrid: Fadi's accuracy + Mr_Rakun's methods)
+if enableHTF
+    // Create new HTF candle on period change (Mr_Rakun style condition)
+    if isNewHTFPeriod or (barstate.isconfirmed and array.size(htfCandles) == 0)
+        newCandle = HTFCandle.new(o=open, c=close, h=high, l=low, start_bar=bar_index, end_bar=bar_index, is_complete=false)
+        array.unshift(htfCandles, newCandle)
+        
+        // Mark previous candle as complete
+        if array.size(htfCandles) > 1
+            prevCandle = array.get(htfCandles, 1)
+            prevCandle.is_complete := true
+            array.set(htfCandles, 1, prevCandle)
+        
+        // Cleanup old candles
+        while array.size(htfCandles) > maxHTFCandles
+            oldCandle = array.pop(htfCandles)
+            if not na(oldCandle.body)
+                box.delete(oldCandle.body)
+            if not na(oldCandle.wick_up)
+                line.delete(oldCandle.wick_up)
+            if not na(oldCandle.wick_down)
+                line.delete(oldCandle.wick_down)
+            if not na(oldCandle.timer_label)
+                label.delete(oldCandle.timer_label)
+            if not na(oldCandle.timer_label_below)
+                label.delete(oldCandle.timer_label_below)
+    
+    // Update current HTF candle (Mr_Rakun style: update method pattern)
+    if array.size(htfCandles) > 0
+        currentCandle = array.first(htfCandles)
+        // Update high if current high exceeds candle high
+        if high > currentCandle.h
+            currentCandle.h := high
+        // Update low if current low is below candle low  
+        if low < currentCandle.l
+            currentCandle.l := low
+        // Always update close and end bar
+        currentCandle.c := close
+        currentCandle.end_bar := bar_index
+        array.set(htfCandles, 0, currentCandle)
+
+// HTF Candle Rendering (Mr_Rakun's clean approach + Fadi's accuracy)
+// HTF Candle Rendering (Mr_Rakun's clean approach + Fadi's accuracy)
+if enableHTF
+    // Full redraw only on last bar for performance
+    if barstate.islast
+        // Complete visual cleanup (Mr_Rakun style) - DON'T delete timer labels here
+        for i = 0 to math.min(array.size(htfCandles) - 1, maxHTFCandles - 1)
+            candle = array.get(htfCandles, i)
+            if not na(candle.body)
+                box.delete(candle.body)
+                candle.body := na
+            if not na(candle.wick_up)
+                line.delete(candle.wick_up)
+                candle.wick_up := na
+            if not na(candle.wick_down)
+                line.delete(candle.wick_down)
+                candle.wick_down := na
+            // Note: Timer labels are handled separately now
+            array.set(htfCandles, i, candle)
+        
+        // Redraw all candles (clean slate approach)
+        for i = 0 to math.min(array.size(htfCandles) - 1, maxHTFCandles - 1)
+            candle = array.get(htfCandles, i)
+            
+            // Calculate position (FIXED: reverse order so newest is leftmost)
+            candleBuffer = htfOffset + (htfCandleWidth + 2) * (maxHTFCandles - 1 - i)
+            leftX = bar_index + candleBuffer
+            rightX = leftX + htfCandleWidth
+            // SIMPLE MATHEMATICAL CENTER: Use the exact center of the span
+            wickCenterX = leftX + math.floor(htfCandleWidth / 2)
+            
+            // Determine candle colors
+            isBull = candle.c >= candle.o
+            bodyColor = isBull ? htfBullBodyColor : htfBearBodyColor
+            borderColor = isBull ? htfBullBorderColor : htfBearBorderColor
+            wickColor = isBull ? htfBullWickColor : htfBearWickColor
+            
+            // Create candle body (proper OHLC: top=higher of open/close, bottom=lower)
+            bodyTop = math.max(candle.o, candle.c)
+            bodyBottom = math.min(candle.o, candle.c)
+            candle.body := box.new(left=leftX, top=bodyTop, right=rightX, bottom=bodyBottom, border_color=borderColor, bgcolor=bodyColor, border_width=1)
+            
+            // Create wicks (proper centering and endpoints)
+            candle.wick_up := line.new(x1=wickCenterX, y1=candle.h, x2=wickCenterX, y2=bodyTop, color=wickColor, width=1)
+            candle.wick_down := line.new(x1=wickCenterX, y1=bodyBottom, x2=wickCenterX, y2=candle.l, color=wickColor, width=1)
+            
+            // Update candle in array
+            array.set(htfCandles, i, candle)
+
+// === SEPARATE TIMER SYSTEM (Independent from main rendering) ===
+// This runs on EVERY execution to maximize update frequency
+if enableHTF and showTimer and array.size(htfCandles) > 0
+    // FIRST: Clean up timer labels from ALL candles (including completed ones)
+    for i = 0 to array.size(htfCandles) - 1
+        candle = array.get(htfCandles, i)
+        if not na(candle.timer_label)
+            label.delete(candle.timer_label)
+            candle.timer_label := na
+        if not na(candle.timer_label_below)
+            label.delete(candle.timer_label_below)
+            candle.timer_label_below := na
+        array.set(htfCandles, i, candle)
+    
+    // THEN: Only create new timer labels for the current incomplete candle
+    currentCandle = array.first(htfCandles)
+    if not currentCandle.is_complete
+        
+        // Calculate fresh timer data
+        timeLeft = (time_close(htfTimeframe) - timenow) / 1000
+        readableTimeframe = getReadableTimeframe(htfTimeframe)
+        
+        timeText = if timeLeft > 0
+            hours = math.floor(timeLeft / 3600)
+            minutes = math.floor((timeLeft - hours * 3600) / 60)
+            seconds = math.floor(timeLeft - hours * 3600 - minutes * 60)
+            if hours > 0
+                str.format("{0}:{1,number,00}:{2,number,00}", hours, minutes, seconds)
+            else
+                str.format("{0}:{1,number,00}", minutes, seconds)
+        else
+            "Closed"
+        
+        // Fresh label positioning
+        textSize = switch timerTextSize
+            "Small" => size.small
+            "Normal" => size.normal
+            "Large" => size.large
+            => size.normal
+        
+        firstCandleX = bar_index + htfOffset + (htfCandleWidth + 2) * (maxHTFCandles - 1)
+        lastCandleX = bar_index + htfOffset + htfCandleWidth
+        centerX = math.round((firstCandleX + lastCandleX) / 2)
+        
+        highestPoint = currentCandle.h
+        lowestPoint = currentCandle.l
+        for j = 0 to math.min(array.size(htfCandles) - 1, maxHTFCandles - 1)
+            candleData = array.get(htfCandles, j)
+            highestPoint := math.max(highestPoint, candleData.h)
+            lowestPoint := math.min(lowestPoint, candleData.l)
+        
+        htfRange = highestPoint - lowestPoint
+        
+        // Create fresh labels every time
+        if timerTextPosition == "Above"
+            currentCandle.timer_label := label.new(x=centerX, y=highestPoint + htfRange * 0.12, text=readableTimeframe, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+            currentCandle.timer_label_below := label.new(x=centerX, y=highestPoint + htfRange * 0.06, text=timeText, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+        else
+            currentCandle.timer_label := label.new(x=centerX, y=lowestPoint - htfRange * 0.12, text=readableTimeframe, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+            currentCandle.timer_label_below := label.new(x=centerX, y=lowestPoint - htfRange * 0.06, text=timeText, style=label.style_none, color=color(na), textcolor=timerColor, size=textSize)
+        
+        array.set(htfCandles, 0, currentCandle)
+
+// === SETTINGS: FAIR VALUE GAPS (FVG) ===
+inputGroupFVG = "Fair Value Gap (FVG) Settings"
+showFVG = input.bool(true, "Show FVGs", group=inputGroupFVG, tooltip="Toggle the display of Fair Value Gaps (FVG) on the chart.")
+redrawFVGUnbalancedArea = input.bool(false, "Adjust FVG to Remaining Imbalance?", group=inputGroupFVG, tooltip="If enabled, the FVG box will shrink as price fills the imbalance, showing only the remaining unbalanced area.")
+removeMitigatedFVGDrawings = input.bool(true, "Remove Balanced FVGs", group=inputGroupFVG, tooltip="If enabled, FVG boxes will be removed from the chart once they are fully balanced (mitigated).")
+fvgColor = input.color(#2962FF, "FVG Color", group=inputGroupFVG, tooltip="Color for Fair Value Gap boxes.")
+var int maxImbalances = 200
+
+// === FVG TYPE & ARRAYS ===
+type FVG
+    int xLow
+    int xHigh
+    int xLowTime
+    int xHighTime
+    float yLow
+    float yHigh
+    int mitigatedTime
+    float unmitigatedY = 0.0
+    bool mitigated = false
+    box fvgBox = na
+
+var FVG[] BISIs = array.new<FVG>()
+var FVG[] SIBIs = array.new<FVG>()
+
+// === FVG HELPERS ===
+cleanupFVGs(array<FVG> fvgArray) =>
+    while array.size(fvgArray) > maxImbalances
+        fvg = array.shift(fvgArray)
+        if not na(fvg.fvgBox)
+            box.delete(fvg.fvgBox)
+
+renderFVGs(array<FVG> fvgs, color boxColor, bool isBullish) =>
+    if array.size(fvgs) > 0
+        for i = 0 to array.size(fvgs) - 1
+            fvg = array.get(fvgs, i)
+            // Only render if within lookback window
+            if bar_index - fvg.xLow <= lookbackBars or bar_index - fvg.xHigh <= lookbackBars
+                prevUnmitigatedY = fvg.unmitigatedY == 0 ? (isBullish ? fvg.yHigh : fvg.yLow) : fvg.unmitigatedY
+                if not fvg.mitigated
+                    mitigatedY = isBullish ? low <= prevUnmitigatedY : high >= prevUnmitigatedY
+                    if mitigatedY
+                        fvg.unmitigatedY := isBullish ? low : high
+                    fullyMitigated = isBullish ? fvg.unmitigatedY <= fvg.yLow : fvg.unmitigatedY >= fvg.yHigh
+                    if fullyMitigated
+                        fvg.mitigatedTime := time
+                        fvg.mitigated := true
+                        fvg.unmitigatedY := prevUnmitigatedY
+                boxRightTime = time + (time - time[2])
+                if na(fvg.fvgBox)
+                    boxLeftTime = isBullish ? fvg.xLowTime : fvg.xHighTime
+                    fillColor = color.new(boxColor, 80)
+                    fvg.fvgBox := box.new(xloc = xloc.bar_time, left = boxLeftTime, right = boxRightTime, top = fvg.yHigh, bottom = fvg.yLow, border_color = fillColor, bgcolor = fillColor)
+                else
+                    box.set_right(fvg.fvgBox, fvg.mitigated ? fvg.mitigatedTime : boxRightTime)
+                    if redrawFVGUnbalancedArea
+                        if isBullish
+                            box.set_top(fvg.fvgBox, fvg.unmitigatedY)
+                        else
+                            box.set_bottom(fvg.fvgBox, fvg.unmitigatedY)
+                if removeMitigatedFVGDrawings and fvg.mitigated
+                    box.delete(fvg.fvgBox)
+                array.set(fvgs, i, fvg)
+
+// === FVG DETECTION ===
+if barstate.isconfirmed
+    bisiFVG = high[2] < low
+    sibiFVG = low[2] > high
+    if bisiFVG
+        bisi = FVG.new()
+        bisi.xLow := bar_index[2]
+        bisi.xHigh := bar_index
+        bisi.xLowTime := time[2]
+        bisi.xHighTime := time
+        bisi.yLow := high[2]
+        bisi.yHigh := low
+        array.push(BISIs, bisi)
+    if sibiFVG
+        sibi = FVG.new()
+        sibi.xLow := bar_index
+        sibi.xHigh := bar_index[2]
+        sibi.xLowTime := time
+        sibi.xHighTime := time[2]
+        sibi.yLow := high
+        sibi.yHigh := low[2]
+        array.push(SIBIs, sibi)
+    cleanupFVGs(BISIs)
+    cleanupFVGs(SIBIs)
+    if showFVG
+        renderFVGs(BISIs, fvgColor, true)
+        renderFVGs(SIBIs, fvgColor, false)
+
+// === SETTINGS: CISD (Change in State of Delivery) ===
+inputGroupCISD = "CISD Settings"
+showCISD = input.bool(true, "Show CISD", group=inputGroupCISD, tooltip="Toggle the display of Change in State of Delivery levels.")
+showBullishCISD = input.bool(true, "Show Bullish CISD", group=inputGroupCISD, tooltip="Show bullish CISD levels (sweep lows, close above).")
+showBearishCISD = input.bool(true, "Show Bearish CISD", group=inputGroupCISD, tooltip="Show bearish CISD levels (sweep highs, close below).")
+cisdColor = input.color(#2962FF, "CISD Color", group=inputGroupCISD, tooltip="Color for CISD level lines.")
+maxCISDs = input.int(10, "Max CISDs Displayed", minval=1, maxval=50, group=inputGroupCISD, tooltip="Maximum number of CISD levels to display.")
+showDebugInfo = input.bool(false, "Show Debug Info", group=inputGroupCISD, tooltip="Show debug table with CISD detection information.")
+var int maxCISDPoints = 100
+
+// === CISD TYPE & ARRAYS ===
+type CISD
+    // Reference to swept swing
+    int swingIndex          // Index in swing array
+    bool isBearish          // Direction of CISD
+    
+    // Order Block (sweep candle series)
+    int startBar            // First candle in sweep series  
+    int endBar              // Last candle in sweep series
+    int startTime           // Time of first candle
+    int endTime             // Time of last candle
+    
+    // CISD level and status
+    float cisdLevel         // The opening price level
+    int triggerBar          // When CISD was triggered
+    int triggerTime         // Time of trigger
+    bool isActive           // Is this CISD still valid
+    
+    // Visual elements
+    line cisdLine = na      // The horizontal line
+
+var CISD[] bullishCISDs = array.new<CISD>()
+var CISD[] bearishCISDs = array.new<CISD>()
+
+// === CISD HELPERS ===
+cleanupCISDs(array<CISD> cisdArray) =>
+    while array.size(cisdArray) > maxCISDPoints
+        cisd = array.shift(cisdArray)
+        if not na(cisd.cisdLine)
+            line.delete(cisd.cisdLine)
+
+// Check if current candle is upclose or downclose
+isUpClose() => close > open
+isDownClose() => close < open
+
+// === CISD DETECTION ===
+// Check on every tick for immediate rendering, but only create new CISDs on confirmed bars
+if showCISD
+    // First, check for CISD invalidations on every tick for immediate response
+    // Check bearish CISDs for invalidation (close back above level, not just wick)
+    if array.size(bearishCISDs) > 0
+        for i = 0 to array.size(bearishCISDs) - 1
+            cisd = array.get(bearishCISDs, i)
+            if cisd.isActive and close > cisd.cisdLevel
+                cisd.isActive := false
+                array.set(bearishCISDs, i, cisd)
+    
+    // Check bullish CISDs for invalidation (close back below level, not just wick)  
+    if array.size(bullishCISDs) > 0
+        for i = 0 to array.size(bullishCISDs) - 1
+            cisd = array.get(bullishCISDs, i)
+            if cisd.isActive and close < cisd.cisdLevel
+                cisd.isActive := false
+                array.set(bullishCISDs, i, cisd)
+
+// Only create new CISDs on confirmed bars to avoid false signals
+if barstate.isconfirmed and showCISD
+    
+    // Now check for new CISDs based on swept swings
+    // The mechanical approach: When swing gets swept, identify the candle series that did the sweeping
+    
+    // Check bearish CISDs (sweep highs with upclose candles, then close below lowest opening)
+    if showBearishCISD and array.size(swingHighs) > 0
+        // Find the most recently swept swing high
+        mostRecentSweptIndex = -1
+        mostRecentSweepBar = -1
+        
+        for i = 0 to array.size(swingHighs) - 1
+            swing = array.get(swingHighs, i)
+            if swing.state == "swept" and swing.sweepX > mostRecentSweepBar
+                mostRecentSweptIndex := i
+                mostRecentSweepBar := swing.sweepX
+        
+        // Only process the most recently swept swing
+        if mostRecentSweptIndex >= 0
+            swing = array.get(swingHighs, mostRecentSweptIndex)
+            
+            // Find the series of upclose candles that swept this high
+            sweepBar = swing.sweepX
+            sweepStart = sweepBar
+            sweepEnd = sweepBar
+            lowestOpen = open[bar_index - sweepBar]
+            
+            // Look backwards from sweep point to find start of upclose series
+            lookback = 1
+            continueLoop = true
+            while lookback <= 10 and sweepBar - lookback >= 0 and continueLoop
+                checkBar = sweepBar - lookback
+                if close[bar_index - checkBar] > open[bar_index - checkBar] // upclose candle
+                    sweepStart := checkBar
+                    lowestOpen := math.min(lowestOpen, open[bar_index - checkBar])
+                    lookback += 1
+                else
+                    continueLoop := false
+            
+            // Check if current candle closes below the lowest opening price from the sweep series
+            if close < open and close < lowestOpen
+                // Check if we haven't already created a CISD for this setup
+                alreadyExists = false
+                if array.size(bearishCISDs) > 0
+                    for j = 0 to array.size(bearishCISDs) - 1
+                        existingCisd = array.get(bearishCISDs, j)
+                        if existingCisd.swingIndex == mostRecentSweptIndex and math.abs(existingCisd.cisdLevel - lowestOpen) < 0.01
+                            alreadyExists := true
+                            break
+                
+                if not alreadyExists
+                    // Create bearish CISD
+                    cisd = CISD.new()
+                    cisd.swingIndex := mostRecentSweptIndex
+                    cisd.isBearish := true
+                    cisd.startBar := bar_index - sweepStart  // Convert to absolute bar index
+                    cisd.endBar := bar_index - sweepEnd      // Convert to absolute bar index
+                    cisd.startTime := time[bar_index - sweepStart]
+                    cisd.endTime := time[bar_index - sweepEnd]
+                    cisd.cisdLevel := lowestOpen
+                    cisd.triggerBar := bar_index
+                    cisd.triggerTime := time
+                    cisd.isActive := true
+                    array.push(bearishCISDs, cisd)
+    
+    // Check bullish CISDs (sweep lows with downclose candles, then close above highest opening)  
+    if showBullishCISD and array.size(swingLows) > 0
+        // Find the most recently swept swing low
+        mostRecentSweptIndex = -1
+        mostRecentSweepBar = -1
+        
+        for i = 0 to array.size(swingLows) - 1
+            swing = array.get(swingLows, i)
+            if swing.state == "swept" and swing.sweepX > mostRecentSweepBar
+                mostRecentSweptIndex := i
+                mostRecentSweepBar := swing.sweepX
+        
+        // Only process the most recently swept swing
+        if mostRecentSweptIndex >= 0
+            swing = array.get(swingLows, mostRecentSweptIndex)
+            
+            // Find the series of downclose candles that swept this low
+            sweepBar = swing.sweepX
+            sweepStart = sweepBar
+            sweepEnd = sweepBar
+            highestOpen = open[bar_index - sweepBar]
+            
+            // Look backwards from sweep point to find start of downclose series
+            lookback = 1
+            continueLoop = true
+            while lookback <= 10 and sweepBar - lookback >= 0 and continueLoop
+                checkBar = sweepBar - lookback
+                if close[bar_index - checkBar] < open[bar_index - checkBar] // downclose candle
+                    sweepStart := checkBar
+                    highestOpen := math.max(highestOpen, open[bar_index - checkBar])
+                    lookback += 1
+                else
+                    continueLoop := false
+            
+            // Check if current candle closes above the highest opening price from the sweep series
+            if close > open and close > highestOpen
+                // Check if we haven't already created a CISD for this setup
+                alreadyExists = false
+                if array.size(bullishCISDs) > 0
+                    for j = 0 to array.size(bullishCISDs) - 1
+                        existingCisd = array.get(bullishCISDs, j)
+                        if existingCisd.swingIndex == mostRecentSweptIndex and math.abs(existingCisd.cisdLevel - highestOpen) < 0.01
+                            alreadyExists := true
+                            break
+                
+                if not alreadyExists
+                    // Create bullish CISD
+                    cisd = CISD.new()
+                    cisd.swingIndex := mostRecentSweptIndex
+                    cisd.isBearish := false
+                    cisd.startBar := bar_index - sweepStart  // Convert to absolute bar index
+                    cisd.endBar := bar_index - sweepEnd      // Convert to absolute bar index
+                    cisd.startTime := time[bar_index - sweepStart]
+                    cisd.endTime := time[bar_index - sweepEnd]
+                    cisd.cisdLevel := highestOpen
+                    cisd.triggerBar := bar_index
+                    cisd.triggerTime := time
+                    cisd.isActive := true
+                    array.push(bullishCISDs, cisd)
+    
+    // Cleanup arrays
+    cleanupCISDs(bullishCISDs)
+    cleanupCISDs(bearishCISDs)
+
+// === CISD RENDERING ===
+renderCISDs(array<CISD> cisds, bool isBearish) =>
+    if array.size(cisds) > 0
+        visibleCount = 0
+        for i = array.size(cisds) - 1 to 0
+            cisd = array.get(cisds, i)
+            withinWindow = bar_index - cisd.triggerBar <= lookbackBars
+            shouldShow = withinWindow and cisd.isActive and visibleCount < maxCISDs
+            
+            // Handle line creation/update
+            if shouldShow
+                if na(cisd.cisdLine)
+                    cisd.cisdLine := line.new(xloc=xloc.bar_time, x1=cisd.startTime, y1=cisd.cisdLevel, x2=cisd.triggerTime, y2=cisd.cisdLevel, color=cisdColor, width=2, extend=extend.none, style=line.style_solid)
+                else
+                    // Update line coordinates if needed
+                    line.set_x1(cisd.cisdLine, cisd.startTime)
+                    line.set_x2(cisd.cisdLine, cisd.triggerTime)
+                    line.set_y1(cisd.cisdLine, cisd.cisdLevel)
+                    line.set_y2(cisd.cisdLine, cisd.cisdLevel)
+                array.set(cisds, i, cisd)
+                visibleCount := visibleCount + 1
+            
+            // Handle line removal for invalidated or out-of-window CISDs
+            if (not cisd.isActive or not withinWindow) and not na(cisd.cisdLine)
+                line.delete(cisd.cisdLine)
+                cisd.cisdLine := na
+                array.set(cisds, i, cisd)
+
+// Render CISDs on every tick for immediate display
+if showCISD
+    if showBearishCISD
+        renderCISDs(bearishCISDs, true)
+    if showBullishCISD  
+        renderCISDs(bullishCISDs, false)
+
+// === DEBUG INFO ===
+if showDebugInfo and barstate.islast
+    var table debugTable = table.new(position.top_right, 4, 10, bgcolor=color.white, border_width=1)
+    table.cell(debugTable, 0, 0, "Type", text_color=color.black, bgcolor=color.gray)
+    table.cell(debugTable, 1, 0, "Level", text_color=color.black, bgcolor=color.gray)
+    table.cell(debugTable, 2, 0, "Active", text_color=color.black, bgcolor=color.gray)
+    table.cell(debugTable, 3, 0, "Trigger", text_color=color.black, bgcolor=color.gray)
+    
+    row = 1
+    if array.size(bearishCISDs) > 0
+        for i = math.max(0, array.size(bearishCISDs) - 5) to array.size(bearishCISDs) - 1
+            cisd = array.get(bearishCISDs, i)
+            if row < 10
+                table.cell(debugTable, 0, row, "Bear", text_color=color.black)
+                table.cell(debugTable, 1, row, str.tostring(cisd.cisdLevel, "#.##"), text_color=color.black)
+                table.cell(debugTable, 2, row, cisd.isActive ? "✓" : "✗", text_color=cisd.isActive ? color.green : color.red)
+                table.cell(debugTable, 3, row, str.tostring(cisd.triggerBar), text_color=color.black)
+                row := row + 1
+    
+    if array.size(bullishCISDs) > 0
+        for i = math.max(0, array.size(bullishCISDs) - 5) to array.size(bullishCISDs) - 1
+            cisd = array.get(bullishCISDs, i)
+            if row < 10
+                table.cell(debugTable, 0, row, "Bull", text_color=color.black)
+                table.cell(debugTable, 1, row, str.tostring(cisd.cisdLevel, "#.##"), text_color=color.black)
+                table.cell(debugTable, 2, row, cisd.isActive ? "✓" : "✗", text_color=cisd.isActive ? color.green : color.red)
+                table.cell(debugTable, 3, row, str.tostring(cisd.triggerBar), text_color=color.black)
+                row := row + 1

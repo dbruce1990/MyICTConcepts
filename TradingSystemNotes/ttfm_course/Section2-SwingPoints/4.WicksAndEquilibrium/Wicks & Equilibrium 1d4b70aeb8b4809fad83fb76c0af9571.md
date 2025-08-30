@@ -1,0 +1,78 @@
+# Wicks & Equilibrium
+
+### **Understanding Order Flow**
+
+Candle wicks and the equilibrium of candle ranges are crucial to the understanding of order flow. In this lesson, the use of equilibrium within the model is covered.
+
+**Candle 2 Closure: Wick**
+
+With a candle 2 closure inside the range of candle 1, the wick is used to frame the candle 3 continuation.
+
+Bullish: the upper half of the wick to support price higher
+
+Bearish: the lower half of the wick to support price lower
+
+[](.images/9991d114-6152-42f9-4883-bef54303ab00.png)
+
+Candle 3 remains in respect to equilibrium of the candle 2 wick.
+
+[](.images/a35e5b45-6cdd-4b0b-d3eb-84ad21e96f00.png)
+
+With a strong closure of candle 3 (outside candle 2) in respect to the wick of candle 2, candle 4 is a probable continuation. The framework is used by taking equilibrium of the candle 3 range.
+
+Bullish: the upper half of candle 3 to support candle 4 higher
+
+Bearish: the lower half of candle 3 to support candle 4 lower
+
+[](.images/5d1ae91e-654b-49ea-c40f-5c3b119f7700.png)
+
+**Candle 2 Closure: No Wick**
+
+With a candle 2 closure lack a large wick for framework, equilibrium should be taken using the candle range.
+
+Bullish: the upper half of candle 2 to support price higher
+
+Bearish: the lower half of candle 2 to support price lower
+
+[](.images/65c61d58-db0c-4f2b-7e4f-6c66b79aea00.png)
+
+**Candle 3 Closure: Condition**
+
+With candle 2 failing to close back within the range of candle 1, candle 3 should be avoided.
+
+Bullish: the upper half of candle 3 to support price higher
+
+Bearish: the lower half of candle 3 to support price lower
+
+[](.images/37ec0645-33fd-4d2e-dfcd-af6ba731f300.png)
+
+Candle 4 expansion occurs in respect to equilibrium of the candle 3 range.
+
+[](.images/079f04a8-8551-4dd3-d44e-6d7df6ae9300.png)
+
+**Highlighting Equilibrium**
+
+In reference to the Wicks & Equilibrium lesson above, price should respect:
+
+Upper half of either the previous candle range or candle wick during bullish expansion
+
+Lower half of either the previous candle range or candle wick during bearish expansion
+
+[](.images/01ab7dd6-c395-4cd8-7b59-9dc720712a00.png)
+
+The open of the current candle to the equilibrium of the previous candle is the area highlighted, the anticipation is that the following candle wick should form in the highlighted area.
+
+Bullish candles cannot form its initial wick above the open and bearish candles cannot form its initial wick below its open. This is why the highlighted area is marked from the current candles open to the equilibrium of the previous instead of the entire equilibrium range.
+
+[](.images/ab9df169-b5b5-43ed-12f4-45239d579a00.png)
+
+Repeat this process following candle 3 closing, anticipating the open of candle 4 to equilibrium of candle 3 to support price higher.
+
+[](.images/93a20d37-860f-45e9-de1d-d2d820e6ce00.png)
+
+Other Examples
+
+[](.images/0fd173d2-52c6-4c6e-7db8-1f8ab76de600.png)
+
+> This is the end of the Wicks & Equilibrium lesson
+>

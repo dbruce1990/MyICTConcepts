@@ -1,0 +1,3 @@
+This is my variation of TTrades' "next day model". It was simply an adaptation of TFO's "TTrades Daily Bias [TFO]" indicator (link to TFO's indicator explination here: https://www.tradingview.com/script/xdwgV3Fx-TTrades-Daily-Bias-TFO/) and helps showcase at least one possible way of detecting "c1, c2, c3, c4" candles. 
+
+When reviewing and understanding this the bias.pine script, keep in mind the inspiration from TFO's "TTrades Dialy Bias" script that i will put under /ttrades_daily_bias_tfo folder for inspiration. 

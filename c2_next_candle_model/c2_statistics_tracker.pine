@@ -1,0 +1,675 @@
+//@version=6
+indicator("C2 Next Candle Statistics Tracker", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ========================================================================
+// C2 NEXT CANDLE MODEL STATISTICS TRACKER
+// Based on: TTrades Daily Bias (I refer to it as the Next Candle Model)
+// Purpose: Track C3 success rates after C2 closures and C4 success rates after C3 closures
+// ========================================================================
+
+// === SWING POINT TYPE & ARRAYS ===
+type SwingPoint
+    int xBar
+    int xTime
+    float y
+    string state // "active", "swept", "closed_through"
+    int sweepX
+    int closedX
+    line lineDrawing = na
+
+var swingHighs = array.new<SwingPoint>()
+var swingLows = array.new<SwingPoint>()
+
+// Active swept swing references for C2 detection (declare early)
+var float active_swept_high = na      // Level of the swept swing high we're monitoring
+var int active_swept_high_bar = na    // Bar index when the swing was swept
+var float active_swept_low = na       // Level of the swept swing low we're monitoring  
+var int active_swept_low_bar = na     // Bar index when the swing was swept
+
+// === SWING POINT SETTINGS ===
+inputGroupSwings = "Swing Point Settings"
+showActiveSwings = input.bool(true, "Show Active Swings", group=inputGroupSwings, tooltip="Show swing points that have not been swept or closed through.")
+showSweptSwings = input.bool(true, "Show Swept Swings", group=inputGroupSwings, tooltip="Show swing points that have been swept (wicked through) but not closed through.")
+maxSweptSwings = input.int(5, "Max Swept Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of swept swings to display.")
+showClosedSwings = input.bool(false, "Show Closed-Through Swings", group=inputGroupSwings, tooltip="Show swing points that have been closed through (break of structure). Useful for market structure analysis.")
+maxClosedSwings = input.int(3, "Max Closed Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of closed-through swings to display.")
+activeHighColor = input.color(color.black, "Active High Color", group=inputGroupSwings, tooltip="Color for active swing high lines.")
+activeLowColor = input.color(color.black, "Active Low Color", group=inputGroupSwings, tooltip="Color for active swing low lines.")
+sweptHighColor = input.color(color.black, "Swept High Color", group=inputGroupSwings, tooltip="Color for swept swing high lines.")
+sweptLowColor = input.color(color.black, "Swept Low Color", group=inputGroupSwings, tooltip="Color for swept swing low lines.")
+closedHighColor = input.color(#616161, "Closed High Color", group=inputGroupSwings, tooltip="Color for closed-through swing high lines.")
+closedLowColor = input.color(#616161, "Closed Low Color", group=inputGroupSwings, tooltip="Color for closed-through swing low lines.")
+activeSwingStyle = input.string("solid", "Active Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for active swings.")
+sweptSwingStyle = input.string("dashed", "Swept Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for swept swings.")
+closedSwingStyle = input.string("dotted", "Closed-Through Swing Style", options=["solid", "dashed", "dotted"], group=inputGroupSwings, tooltip="Line style for closed-through swings.")
+maxSwingPoints = input.int(100, "Max Swing Points Stored", minval=20, maxval=500, group=inputGroupSwings, tooltip="Maximum number of swing points to keep in memory. Older points will be removed for performance.")
+lookbackBars = input.int(500, "Bars to Display", minval=50, maxval=5000, group=inputGroupSwings, tooltip="Only show swing points from the last N bars.")
+
+// === PATTERN DETECTION SETTINGS ===
+inputGroupPatterns = "Pattern Detection Settings"
+table_position = input.string("Bottom Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=inputGroupPatterns)
+
+// Pattern Enable/Disable Controls
+enable_c2_detection = input.bool(true, "Enable C2 Closure Detection", tooltip="Detect all C2 closures (traditional + outside bar patterns)", group=inputGroupPatterns)
+enable_c3_detection = input.bool(true, "Enable C3 Closure Detection", tooltip="Detect C3 closures (swing point + close through C2's opening price)", group=inputGroupPatterns)
+
+// Filtering Options
+filter_swing_points_only = input.bool(false, "Filter: Only at Swing Points", tooltip="When enabled, only detect patterns at swept swing highs/lows", group=inputGroupPatterns)
+
+// Display Options
+show_logic_in_labels = input.bool(false, "Show Logic in Labels", tooltip="Include detailed logic explanation in pattern labels", group=inputGroupPatterns)
+show_debug_labels = input.bool(false, "Show Debug Labels", tooltip="Show debug information for troubleshooting", group=inputGroupPatterns)
+
+// SIMPLIFIED COLOR SCHEME - C2CL vs C3CL focus
+C2CL_COLOR = color.blue         // All C2 closures 
+C3CL_COLOR = color.green        // All C3 closures
+HIT_COLOR = color.orange        // Hit confirmations
+DEBUG_COLOR = color.yellow      // Debug labels
+
+// === BULLETPROOF ARRAY CAPPING ===
+while array.size(swingHighs) > maxSwingPoints
+    swing = array.shift(swingHighs)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+while array.size(swingLows) > maxSwingPoints
+    swing = array.shift(swingLows)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+
+// === SWING DETECTION (3-bar pivots) ===
+if barstate.isconfirmed
+    // Highs - simple logic: high[1] > high[0] and high[1] > high[2]
+    if high[1] > high[0] and high[1] > high[2]
+        swing = SwingPoint.new()
+        swing.y := high[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingHighs, swing)
+        
+    // Lows - simple logic: low[1] < low[0] and low[1] < low[2]
+    if low[1] < low[0] and low[1] < low[2]
+        swing = SwingPoint.new()
+        swing.y := low[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingLows, swing)
+
+// === SWING RENDERING ===
+renderSwings(array<SwingPoint> swings, bool isHigh) =>
+    if array.size(swings) > 0
+        sweptIdx = array.new_int()
+        closedIdx = array.new_int()
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            // Only process/display if within lookback window
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            // Update state
+            if swing.state == "active"
+                swept = isHigh ? high > swing.y : low < swing.y
+                closed = isHigh ? close > swing.y : close < swing.y
+                if swept
+                    swing.state := "swept"
+                    swing.sweepX := bar_index
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                array.set(swings, i, swing)
+            if swing.state == "swept"
+                closed = isHigh ? close > swing.y : close < swing.y
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                    array.set(swings, i, swing)
+            // Collect indices for visible swept/closed
+            if swing.state == "swept"
+                array.push(sweptIdx, i)
+            if swing.state == "closed_through"
+                array.push(closedIdx, i)
+        // Cap swept/closed shown (for display only)
+        sweptToShow = array.size(sweptIdx) > maxSweptSwings ? array.slice(sweptIdx, array.size(sweptIdx) - maxSweptSwings, array.size(sweptIdx)) : sweptIdx
+        closedToShow = array.size(closedIdx) > maxClosedSwings ? array.slice(closedIdx, array.size(closedIdx) - maxClosedSwings, array.size(closedIdx)) : closedIdx
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            showLine = false
+            lineColor = color(na)
+            style = line.style_solid
+            // Color and style by state and high/low
+            if swing.state == "active" and showActiveSwings
+                showLine := true
+                lineColor := isHigh ? activeHighColor : activeLowColor
+                style := activeSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "swept" and showSweptSwings and array.includes(sweptToShow, i)
+                showLine := true
+                lineColor := isHigh ? sweptHighColor : sweptLowColor
+                style := sweptSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "closed_through" and showClosedSwings and array.includes(closedToShow, i)
+                showLine := true
+                lineColor := isHigh ? closedHighColor : closedLowColor
+                style := closedSwingStyle == "dashed" ? line.style_dashed : closedSwingStyle == "dotted" ? line.style_dotted : line.style_solid
+            if showLine
+                x2 = swing.state == "active" ? bar_index : swing.state == "swept" ? swing.sweepX : swing.closedX
+                if na(swing.lineDrawing)
+                    swing.lineDrawing := line.new(x1=swing.xBar, y1=swing.y, x2=x2, y2=swing.y, color=lineColor, width=1, extend=extend.none, style=style)
+                else
+                    line.set_x2(swing.lineDrawing, x2)
+                    line.set_style(swing.lineDrawing, style)
+                    line.set_color(swing.lineDrawing, lineColor)
+                array.set(swings, i, swing)
+            else
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                    swing.lineDrawing := na
+                    array.set(swings, i, swing)
+
+if showActiveSwings or showSweptSwings or showClosedSwings
+    renderSwings(swingHighs, true)
+    renderSwings(swingLows, false)
+
+// Update active swept swing references IMMEDIATELY after rendering - BEFORE pattern detection
+if barstate.isconfirmed
+    // Find the most recent swept swing high that hasn't been closed through
+    active_swept_high := na
+    active_swept_high_bar := na
+    if array.size(swingHighs) > 0
+        for i = array.size(swingHighs) - 1 to 0
+            swing = array.get(swingHighs, i)
+            // Take the most recent swept swing that hasn't been closed through
+            if swing.state == "swept"
+                active_swept_high := swing.y
+                active_swept_high_bar := swing.xBar
+                break  // Take the most recent swept swing
+    
+    // Find the most recent swept swing low that hasn't been closed through
+    active_swept_low := na
+    active_swept_low_bar := na
+    if array.size(swingLows) > 0
+        for i = array.size(swingLows) - 1 to 0
+            swing = array.get(swingLows, i)
+            // Take the most recent swept swing that hasn't been closed through
+            if swing.state == "swept"
+                active_swept_low := swing.y
+                active_swept_low_bar := swing.xBar
+                break  // Take the most recent swept swing
+
+// === C2 STATISTICS TRACKER ===
+// Convert string to position
+get_table_position() =>
+    switch table_position
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+        => position.bottom_right
+
+// Constants for bias values
+var int BIAS_C2_PCL = -1    // C2 formed, bias C2 low (expecting C3 to take C2 low)
+var int BIAS_NONE = 0       // No pattern detected
+var int BIAS_C2_PCH = 1     // C2 formed, bias C2 high (expecting C3 to take C2 high)
+var int BIAS_C3_PCL = -2    // C3 closure formed, bias C3 low (expecting C4 to take C3 low)
+var int BIAS_C3_PCH = 2     // C3 closure formed, bias C3 high (expecting C4 to take C3 high)
+
+// Initialize bias tracking
+var int current_bias = BIAS_NONE
+var bool pattern_detected = false
+
+// Simple tracking variables - no complex state
+var float target_high = na
+var float target_low = na
+
+// Label tracking for hit/miss updates
+var label current_pattern_label = na
+
+// C2 Statistics Variables - Traditional C2s
+var int c2_pch_samples = 0     // Total C2s with PCH bias
+var int c2_pcl_samples = 0     // Total C2s with PCL bias
+var int c2_pch_hits = 0        // C2 PCH bias hits (C3 reached C2 high)
+var int c2_pcl_hits = 0        // C2 PCL bias hits (C3 reached C2 low)
+var int c2_pch_closes = 0      // C2 PCH bias close throughs
+var int c2_pcl_closes = 0      // C2 PCL bias close throughs
+
+// C3 Closure Statistics - When successful displacement fails to continue
+var int c3_pch_samples = 0     // Total C3 closures with PCH bias
+var int c3_pcl_samples = 0     // Total C3 closures with PCL bias
+var int c3_pch_hits = 0        // C3 PCH bias hits (C4 reached C3 high)
+var int c3_pcl_hits = 0        // C3 PCL bias hits (C4 reached C3 low)
+var int c3_pch_closes = 0      // C3 PCH bias close throughs
+var int c3_pcl_closes = 0      // C3 PCL bias close throughs
+
+// Outside Bar C2 Statistics Variables - Separate tracking
+var int ob_c2_pch_samples = 0     // Total Outside Bar C2s with PCH bias
+var int ob_c2_pcl_samples = 0     // Total Outside Bar C2s with PCL bias
+var int ob_c2_pch_hits = 0        // Outside Bar C2 PCH bias hits
+var int ob_c2_pcl_hits = 0        // Outside Bar C2 PCL bias hits
+var int ob_c2_pch_closes = 0      // Outside Bar C2 PCH bias close throughs
+var int ob_c2_pcl_closes = 0      // Outside Bar C2 PCL bias close throughs
+
+// ========================================================================
+// CLEAN PATTERN DETECTION FUNCTIONS
+// ========================================================================
+
+// Simple C2 Closure Detection
+detect_c2_closure() =>
+    // C2 Logic: Sweep previous high/low but close back inside previous candle's range
+    swept_high = high > high[1]
+    swept_low = low < low[1]
+    closed_inside = close >= low[1] and close <= high[1]
+    
+    // Traditional C2 patterns (exclude outside bars for clarity)
+    c2_bullish = swept_low and closed_inside and not swept_high  // Swept low, closed back inside
+    c2_bearish = swept_high and closed_inside and not swept_low  // Swept high, closed back inside
+    
+    [c2_bullish, c2_bearish]
+
+// Simple C3 Closure Detection  
+detect_c3_closure() =>
+    // C3 Logic: We are C3, checking if C2 (previous candle) formed a swing point
+    // C1 = [2], C2 = [1], C3 = [0] (current)
+    
+    // Check if C2 (previous candle) formed a swing point
+    swing_high_formed = high[1] > high and high[1] > high[2]  // C2 higher than both C1 and C3
+    swing_low_formed = low[1] < low and low[1] < low[2]       // C2 lower than both C1 and C3
+    
+    // TTrades Definition: C3 (current) closes through opening price of C2 (previous)
+    c3_bullish = swing_low_formed and close > open[1]   // C2 swing low + C3 closes above C2 open
+    c3_bearish = swing_high_formed and close < open[1]  // C2 swing high + C3 closes below C2 open
+    
+    [c3_bullish, c3_bearish]
+
+// Outside Bar C2 Detection
+detect_outside_bar_c2() =>
+    // Outside Bar: Sweeps both previous high AND low
+    is_outside_bar = high > high[1] and low < low[1]
+    
+    ob_c2_bullish = false
+    ob_c2_bearish = false
+    
+    if is_outside_bar
+        // Bias based on close direction
+        if close > high[1]
+            ob_c2_bullish := true  // Closed above previous high
+        else if close < low[1]  
+            ob_c2_bearish := true  // Closed below previous low
+    
+    [ob_c2_bullish, ob_c2_bearish]
+
+// Check if pattern is at swept swing point
+is_at_swept_swing(pattern_type) =>
+    // Simple logic: swing high → check candle high, swing low → check candle low
+    at_swept_high = not na(active_swept_high) and high >= active_swept_high
+    at_swept_low = not na(active_swept_low) and low <= active_swept_low
+    
+    // For bearish patterns, check if we're at a swept high
+    // For bullish patterns, check if we're at a swept low
+    if pattern_type == "bearish"
+        at_swept_high
+    else if pattern_type == "bullish"
+        at_swept_low
+    else
+        false
+
+// ========================================================================
+// MAIN PATTERN DETECTION - Clean and Simple  
+// ========================================================================
+// Run on the last (closing) update of the current bar
+if barstate.isconfirmed
+    // === STEP 1: CHECK IF PREVIOUS BIAS WAS HIT ===
+    // Check for target hits based on current bias (from previous candle)
+    if current_bias != BIAS_NONE
+        hit_occurred = false
+        
+        if (current_bias == BIAS_C2_PCH or current_bias == BIAS_C3_PCH) and high >= target_high
+            hit_occurred := true
+            // Update statistics
+            if current_bias == BIAS_C2_PCH
+                c2_pch_hits += 1
+                if close >= target_high
+                    c2_pch_closes += 1
+            else if current_bias == BIAS_C3_PCH
+                c3_pch_hits += 1
+                if close >= target_high
+                    c3_pch_closes += 1
+        
+        else if (current_bias == BIAS_C2_PCL or current_bias == BIAS_C3_PCL) and low <= target_low
+            hit_occurred := true
+            // Update statistics
+            if current_bias == BIAS_C2_PCL
+                c2_pcl_hits += 1
+                if close <= target_low
+                    c2_pcl_closes += 1
+            else if current_bias == BIAS_C3_PCL
+                c3_pcl_hits += 1
+                if close <= target_low
+                    c3_pcl_closes += 1
+        
+        // Update previous label with ✓ or ✗
+        if not na(current_pattern_label)
+            original_text = label.get_text(current_pattern_label)
+            if hit_occurred
+                hit_type = ""
+                if (current_bias == BIAS_C2_PCH or current_bias == BIAS_C3_PCH)
+                    hit_type := close >= target_high ? " ✓CLOSE" : " ✓WICK"
+                else
+                    hit_type := close <= target_low ? " ✓CLOSE" : " ✓WICK"
+                label.set_text(current_pattern_label, original_text + hit_type)
+            else
+                label.set_text(current_pattern_label, original_text + " ✗")
+        
+        // Reset bias and label reference after checking
+        current_bias := BIAS_NONE
+        current_pattern_label := na
+    
+    // === STEP 2: DETECT NEW PATTERNS FOR CURRENT CANDLE ===
+    // Initialize pattern flags (use := for existing vars)
+    pattern_detected := false
+    var bool c2_bull_detected = false
+    var bool c2_bear_detected = false 
+    var bool c3_bull_detected = false
+    var bool c3_bear_detected = false
+    var bool ob_c2_bull_detected = false
+    var bool ob_c2_bear_detected = false
+    
+    // === DETECT ALL PATTERNS ===
+    
+    // C2 Closure Detection
+    [c2_bull_raw, c2_bear_raw] = detect_c2_closure()
+    
+    // C3 Closure Detection 
+    [c3_bull_raw, c3_bear_raw] = detect_c3_closure()
+    
+    // Outside Bar C2 Detection
+    [ob_c2_bull_raw, ob_c2_bear_raw] = detect_outside_bar_c2()
+    
+    // === APPLY FILTERS ===
+    
+    // Apply individual pattern enable/disable first
+    c2_bull_detected := enable_c2_detection and c2_bull_raw
+    c2_bear_detected := enable_c2_detection and c2_bear_raw
+    c3_bull_detected := enable_c3_detection and c3_bull_raw  
+    c3_bear_detected := enable_c3_detection and c3_bear_raw
+    ob_c2_bull_detected := enable_c2_detection and ob_c2_bull_raw  // Combined with C2 detection
+    ob_c2_bear_detected := enable_c2_detection and ob_c2_bear_raw  // Combined with C2 detection
+    
+    // Apply swing point filter if enabled - simple wrapper check
+    if filter_swing_points_only
+        // Only allow patterns at swept swing points (POI filtering)
+        c2_bear_detected := c2_bear_detected and is_at_swept_swing("bearish")
+        c2_bull_detected := c2_bull_detected and is_at_swept_swing("bullish")
+        c3_bear_detected := c3_bear_detected and is_at_swept_swing("bearish")
+        c3_bull_detected := c3_bull_detected and is_at_swept_swing("bullish")
+        ob_c2_bear_detected := ob_c2_bear_detected and is_at_swept_swing("bearish")
+        ob_c2_bull_detected := ob_c2_bull_detected and is_at_swept_swing("bullish")
+    
+    // === PATTERN PRIORITY & BIAS ASSIGNMENT ===
+    // Priority: C3 > C2 > Outside Bar C2
+    
+    if c3_bull_detected
+        current_bias := BIAS_C3_PCH
+        target_high := high
+        target_low := low
+        c3_pch_samples += 1
+        pattern_detected := true
+        
+        label_text = if show_logic_in_labels
+            "C3CL↑\nSW Low + Close>" + str.tostring(open[1], "#.####") + "\nBias: C4→PCH"
+        else
+            "C3CL↑\nBias: C4→PCH"
+        current_pattern_label := label.new(bar_index, low, label_text, color=C3CL_COLOR, style=label.style_label_up, size=size.small)
+        
+        // Clear POI if pattern formed at swept swing
+        if filter_swing_points_only and is_at_swept_swing("bullish")
+            active_swept_low := na
+            active_swept_low_bar := na
+        
+    else if c3_bear_detected
+        current_bias := BIAS_C3_PCL
+        target_high := high
+        target_low := low
+        c3_pcl_samples += 1
+        pattern_detected := true
+        
+        label_text = if show_logic_in_labels
+            "C3CL↓\nSW High + Close<" + str.tostring(open[1], "#.####") + "\nBias: C4→PCL"
+        else
+            "C3CL↓\nBias: C4→PCL"
+        current_pattern_label := label.new(bar_index, high, label_text, color=C3CL_COLOR, style=label.style_label_down, size=size.small)
+        
+        // Clear POI if pattern formed at swept swing
+        if filter_swing_points_only and is_at_swept_swing("bearish")
+            active_swept_high := na
+            active_swept_high_bar := na
+        
+    else if c2_bull_detected
+        current_bias := BIAS_C2_PCH
+        target_high := high
+        target_low := low
+        c2_pch_samples += 1
+        pattern_detected := true
+        
+        label_text = if show_logic_in_labels
+            if filter_swing_points_only
+                "C2@SW↑\nSwept:" + str.tostring(low, "#.####") + " Close:" + str.tostring(close, "#.####") + "\nBias: PCH"
+            else
+                "C2↑\nSwept:" + str.tostring(low, "#.####") + " Close:" + str.tostring(close, "#.####") + "\nBias: PCH"
+        else
+            if filter_swing_points_only
+                "C2@SW↑\nBias: PCH"
+            else
+                "C2↑\nBias: PCH"
+        current_pattern_label := label.new(bar_index, low, label_text, color=C2CL_COLOR, style=label.style_label_up, size=size.small)
+        
+        // Clear POI if pattern formed at swept swing
+        if filter_swing_points_only and is_at_swept_swing("bullish")
+            active_swept_low := na
+            active_swept_low_bar := na
+        
+    else if c2_bear_detected
+        current_bias := BIAS_C2_PCL
+        target_high := high
+        target_low := low
+        c2_pcl_samples += 1
+        pattern_detected := true
+        
+        label_text = if show_logic_in_labels
+            if filter_swing_points_only
+                "C2@SW↓\nSwept:" + str.tostring(high, "#.####") + " Close:" + str.tostring(close, "#.####") + "\nBias: PCL"
+            else
+                "C2↓\nSwept:" + str.tostring(high, "#.####") + " Close:" + str.tostring(close, "#.####") + "\nBias: PCL"
+        else
+            if filter_swing_points_only
+                "C2@SW↓\nBias: PCL"
+            else
+                "C2↓\nBias: PCL"
+        current_pattern_label := label.new(bar_index, high, label_text, color=C2CL_COLOR, style=label.style_label_down, size=size.small)
+        
+        // Clear POI if pattern formed at swept swing
+        if filter_swing_points_only and is_at_swept_swing("bearish")
+            active_swept_high := na
+            active_swept_high_bar := na
+        
+    else if ob_c2_bull_detected
+        current_bias := BIAS_C2_PCH
+        target_high := high
+        target_low := low
+        ob_c2_pch_samples += 1
+        pattern_detected := true
+        
+        label_text = "OutBar-C2↑\nBias: PCH"
+        current_pattern_label := label.new(bar_index, low, label_text, color=C2CL_COLOR, style=label.style_label_up, size=size.small)
+        
+    else if ob_c2_bear_detected
+        current_bias := BIAS_C2_PCL
+        target_high := high
+        target_low := low
+        ob_c2_pcl_samples += 1
+        pattern_detected := true
+        
+        label_text = "OutBar-C2↓\nBias: PCL"
+        current_pattern_label := label.new(bar_index, high, label_text, color=C2CL_COLOR, style=label.style_label_down, size=size.small)
+    
+    // Debug output if enabled
+    if show_debug_labels and not pattern_detected
+        // Show what was tested but didn't qualify  
+        debug_info = "Debug\nC2:" + (c2_bull_raw or c2_bear_raw ? "✓" : "✗") + " C3:" + (c3_bull_raw or c3_bear_raw ? "✓" : "✗") + " OB:" + (ob_c2_bull_raw or ob_c2_bear_raw ? "✓" : "✗") + "\nSW Filter:" + (filter_swing_points_only ? "ON" : "OFF")
+        if filter_swing_points_only
+            poi_info = "\nPOI: H@" + (not na(active_swept_high) ? str.tostring(active_swept_high, "#.####") : "N/A") + " L@" + (not na(active_swept_low) ? str.tostring(active_swept_low, "#.####") : "N/A")
+            // Add current candle levels for comparison
+            poi_info := poi_info + "\nCur: H=" + str.tostring(high, "#.####") + " L=" + str.tostring(low, "#.####")
+            // Show if we're "at" the swept levels
+            at_high = not na(active_swept_high) and high >= active_swept_high
+            at_low = not na(active_swept_low) and low <= active_swept_low
+            poi_info := poi_info + "\nAt: H=" + (at_high ? "✓" : "✗") + " L=" + (at_low ? "✓" : "✗")
+            debug_info := debug_info + poi_info
+        // Only show debug if patterns were detected but filtered out
+        if c2_bull_raw or c2_bear_raw or c3_bull_raw or c3_bear_raw or ob_c2_bull_raw or ob_c2_bear_raw
+            label.new(bar_index, high + (high - low) * 0.1, debug_info, color=DEBUG_COLOR, style=label.style_label_down, size=size.tiny)
+    
+    // TEMPORARY: Special debug for C3 patterns when swing filtering blocks them
+    if filter_swing_points_only and c3_bull_raw and not c3_bull_detected
+        debug_text = "C3 BLOCKED\nC3 Bull: ✓\nAt SW Low: " + (is_at_swept_swing("bullish") ? "✓" : "✗") + "\nSW Low: " + (not na(active_swept_low) ? str.tostring(active_swept_low, "#.####") : "N/A") + "\nCur Low: " + str.tostring(low, "#.####")
+        label.new(bar_index, low - (high - low) * 0.1, debug_text, color=color.red, style=label.style_label_down, size=size.tiny)
+
+// Calculate Success Rates - Traditional C2s
+calc_percentage(successes, attempts) =>
+    attempts > 0 ? str.tostring((successes / attempts) * 100, "#.0") + "%" : "N/A"
+
+string c2_pch_success_rate = calc_percentage(c2_pch_hits, c2_pch_samples)
+string c2_pch_close_rate = calc_percentage(c2_pch_closes, c2_pch_hits)
+
+string c2_pcl_success_rate = calc_percentage(c2_pcl_hits, c2_pcl_samples)
+string c2_pcl_close_rate = calc_percentage(c2_pcl_closes, c2_pcl_hits)
+
+// Calculate Success Rates - Outside Bar C2s
+string ob_c2_pch_success_rate = calc_percentage(ob_c2_pch_hits, ob_c2_pch_samples)
+string ob_c2_pch_close_rate = calc_percentage(ob_c2_pch_closes, ob_c2_pch_hits)
+
+string ob_c2_pcl_success_rate = calc_percentage(ob_c2_pcl_hits, ob_c2_pcl_samples)
+string ob_c2_pcl_close_rate = calc_percentage(ob_c2_pcl_closes, ob_c2_pcl_hits)
+
+// Display Statistics Table
+var table stats_table = table.new(get_table_position(), 3, 12, bgcolor=color.white, border_width=1)
+
+if barstate.islast
+    // Calculate C3 closure success rates
+    c3_pch_success_rate = calc_percentage(c3_pch_hits, c3_pch_samples)
+    c3_pch_close_rate = calc_percentage(c3_pch_closes, c3_pch_hits)
+    c3_pcl_success_rate = calc_percentage(c3_pcl_hits, c3_pcl_samples)
+    c3_pcl_close_rate = calc_percentage(c3_pcl_closes, c3_pcl_hits)
+
+    // Dynamic table title based on filter setting
+    table_title = filter_swing_points_only ? "Pattern@Swing" : "Pattern Type"
+    
+    // Header
+    table.cell(stats_table, 0, 0, table_title, text_color=color.black, bgcolor=color.gray)
+    table.cell(stats_table, 1, 0, "Success Rate", text_color=color.black, bgcolor=color.gray)  
+    table.cell(stats_table, 2, 0, "Close Rate", text_color=color.black, bgcolor=color.gray)
+    
+    // TRADITIONAL C2 Stats
+    table.cell(stats_table, 0, 1, "C2 Bull→PCH", text_color=color.black)
+    table.cell(stats_table, 1, 1, c2_pch_success_rate + " (" + str.tostring(c2_pch_samples) + ")", text_color=color.black)
+    table.cell(stats_table, 2, 1, c2_pch_close_rate, text_color=color.black)
+    
+    table.cell(stats_table, 0, 2, "C2 Bear→PCL", text_color=color.black)
+    table.cell(stats_table, 1, 2, c2_pcl_success_rate + " (" + str.tostring(c2_pcl_samples) + ")", text_color=color.black)
+    table.cell(stats_table, 2, 2, c2_pcl_close_rate, text_color=color.black)
+    
+    // Combined Traditional C2 Stats
+    total_samples = c2_pch_samples + c2_pcl_samples
+    total_hits = c2_pch_hits + c2_pcl_hits
+    total_closes = c2_pch_closes + c2_pcl_closes
+    combined_success = calc_percentage(total_hits, total_samples)
+    combined_close_rate = calc_percentage(total_closes, total_hits)
+    
+    table.cell(stats_table, 0, 3, "Combined C2", text_color=color.black, bgcolor=color.yellow)
+    table.cell(stats_table, 1, 3, combined_success + " (" + str.tostring(total_samples) + ")", text_color=color.black, bgcolor=color.yellow)
+    table.cell(stats_table, 2, 3, combined_close_rate, text_color=color.black, bgcolor=color.yellow)
+    
+    // C3 CLOSURE Stats
+    table.cell(stats_table, 0, 4, "C3 Bull→PCH", text_color=color.black, bgcolor=color.lime)
+    table.cell(stats_table, 1, 4, c3_pch_success_rate + " (" + str.tostring(c3_pch_samples) + ")", text_color=color.black, bgcolor=color.lime)
+    table.cell(stats_table, 2, 4, c3_pch_close_rate, text_color=color.black, bgcolor=color.lime)
+    
+    table.cell(stats_table, 0, 5, "C3 Bear→PCL", text_color=color.black, bgcolor=color.lime)
+    table.cell(stats_table, 1, 5, c3_pcl_success_rate + " (" + str.tostring(c3_pcl_samples) + ")", text_color=color.black, bgcolor=color.lime)
+    table.cell(stats_table, 2, 5, c3_pcl_close_rate, text_color=color.black, bgcolor=color.lime)
+    
+    // Combined C3 Stats
+    c3_total_samples = c3_pch_samples + c3_pcl_samples
+    c3_total_hits = c3_pch_hits + c3_pcl_hits
+    c3_total_closes = c3_pch_closes + c3_pcl_closes
+    c3_combined_success = calc_percentage(c3_total_hits, c3_total_samples)
+    c3_combined_close_rate = calc_percentage(c3_total_closes, c3_total_hits)
+    
+    table.cell(stats_table, 0, 6, "Combined C3", text_color=color.black, bgcolor=color.green)
+    table.cell(stats_table, 1, 6, c3_combined_success + " (" + str.tostring(c3_total_samples) + ")", text_color=color.black, bgcolor=color.green)
+    table.cell(stats_table, 2, 6, c3_combined_close_rate, text_color=color.black, bgcolor=color.green)
+    
+    // OUTSIDE BAR C2 Stats  
+    table.cell(stats_table, 0, 7, "OutBar C2 Bull→PCH", text_color=color.black, bgcolor=color.silver)
+    table.cell(stats_table, 1, 7, ob_c2_pch_success_rate + " (" + str.tostring(ob_c2_pch_samples) + ")", text_color=color.black, bgcolor=color.silver)
+    table.cell(stats_table, 2, 7, ob_c2_pch_close_rate, text_color=color.black, bgcolor=color.silver)
+    
+    table.cell(stats_table, 0, 8, "OutBar C2 Bear→PCL", text_color=color.black, bgcolor=color.silver)
+    table.cell(stats_table, 1, 8, ob_c2_pcl_success_rate + " (" + str.tostring(ob_c2_pcl_samples) + ")", text_color=color.black, bgcolor=color.silver)
+    table.cell(stats_table, 2, 8, ob_c2_pcl_close_rate, text_color=color.black, bgcolor=color.silver)
+    
+    // Combined Outside Bar C2 Stats
+    ob_total_samples = ob_c2_pch_samples + ob_c2_pcl_samples
+    ob_total_hits = ob_c2_pch_hits + ob_c2_pcl_hits
+    ob_total_closes = ob_c2_pch_closes + ob_c2_pcl_closes
+    ob_combined_success = calc_percentage(ob_total_hits, ob_total_samples)
+    ob_combined_close_rate = calc_percentage(ob_total_closes, ob_total_hits)
+    
+    table.cell(stats_table, 0, 9, "Combined OutBar C2", text_color=color.black, bgcolor=color.orange)
+    table.cell(stats_table, 1, 9, ob_combined_success + " (" + str.tostring(ob_total_samples) + ")", text_color=color.black, bgcolor=color.orange)
+    table.cell(stats_table, 2, 9, ob_combined_close_rate, text_color=color.black, bgcolor=color.orange)
+    
+    // ALL C2 TYPES Combined (excluding C3)
+    all_c2_samples = total_samples + ob_total_samples
+    all_c2_hits = total_hits + ob_total_hits
+    all_c2_closes = total_closes + ob_total_closes
+    all_c2_success = calc_percentage(all_c2_hits, all_c2_samples)
+    all_c2_close_rate = calc_percentage(all_c2_closes, all_c2_hits)
+    
+    table.cell(stats_table, 0, 10, "ALL C2 Types", text_color=color.white, bgcolor=color.blue)
+    table.cell(stats_table, 1, 10, all_c2_success + " (" + str.tostring(all_c2_samples) + ")", text_color=color.white, bgcolor=color.blue)
+    table.cell(stats_table, 2, 10, all_c2_close_rate, text_color=color.white, bgcolor=color.blue)
+    
+    // GRAND TOTAL (All pattern types combined)
+    grand_total_samples = all_c2_samples + c3_total_samples
+    grand_total_hits = all_c2_hits + c3_total_hits
+    grand_total_closes = all_c2_closes + c3_total_closes
+    grand_combined_success = calc_percentage(grand_total_hits, grand_total_samples)
+    grand_combined_close_rate = calc_percentage(grand_total_closes, grand_total_hits)
+    
+    table.cell(stats_table, 0, 11, "ALL PATTERNS", text_color=color.white, bgcolor=color.black)
+    table.cell(stats_table, 1, 11, grand_combined_success + " (" + str.tostring(grand_total_samples) + ")", text_color=color.white, bgcolor=color.black)
+    table.cell(stats_table, 2, 11, grand_combined_close_rate, text_color=color.white, bgcolor=color.black)
+
+// Plot bias for visualization (optional)
+plot(current_bias, "C2 Bias", color=current_bias > 0 ? color.green : current_bias < 0 ? color.red : color.gray, display=display.data_window)
+
+// Debug plots to see active swept swings
+plot(not na(active_swept_high) ? 1 : 0, "Has Active Swept High", color=color.orange, display=display.data_window)
+plot(not na(active_swept_low) ? -1 : 0, "Has Active Swept Low", color=color.purple, display=display.data_window)
+plot(not na(active_swept_high) ? active_swept_high : na, "Active Swept High Level", color=color.orange, linewidth=1, display=display.data_window)
+plot(not na(active_swept_low) ? active_swept_low : na, "Active Swept Low Level", color=color.purple, linewidth=1, display=display.data_window)
+plotshape(not na(active_swept_high), "Active High Level", location=location.absolute, style=shape.triangledown, color=color.orange, size=size.tiny, display=display.none)
+plotshape(not na(active_swept_low), "Active Low Level", location=location.absolute, style=shape.triangleup, color=color.purple, size=size.tiny, display=display.none)

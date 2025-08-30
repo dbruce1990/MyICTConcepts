@@ -1,0 +1,132 @@
+//@version=5
+indicator("Simplified Next Day Bias Model", overlay=true)
+
+// Inputs
+var int table_columns = 4
+var int table_rows = 6
+
+// Constants for bias values
+var int BIAS_INSIDE_PCL = -2 // Inside bar inherits PCL bias
+var int BIAS_PCL = -1  // Previous Candle Low (PCL)
+var int BIAS_NONE = 0  // No Bias
+var int BIAS_PCH = 1   // Previous Candle High (PCH)
+var int BIAS_INSIDE_PCH = 2   // Inside bar inherits PCH bias
+
+
+// Initialize bias
+var bias = BIAS_NONE
+
+// Track Statistics
+var int pch_samples = 0
+var int pcl_samples = 0
+var int inside_pch_samples = 0
+var int inside_pcl_samples = 0
+var int outside_bar_samples = 0
+var int pch_hits = 0
+var int pcl_hits = 0
+var int inside_pch_hits = 0
+var int inside_pcl_hits = 0
+var int pch_closes = 0
+var int pcl_closes = 0
+var int inside_pch_closes = 0
+var int inside_pcl_closes = 0
+
+if barstate.isconfirmed
+    // Track results for previous candle
+    if bias == BIAS_PCH
+        if high >= high[1]
+            pch_hits += 1
+            if close > high[1]
+                pch_closes += 1
+    else if bias == BIAS_PCL
+        if low <= low[1]
+            pcl_hits += 1
+            if close < low[1]
+                pcl_closes += 1
+    else if bias == BIAS_INSIDE_PCH
+        if high >= high[1]
+            inside_pch_hits += 1
+            if close > high[1]
+                inside_pch_closes += 1
+    else if bias == BIAS_INSIDE_PCL
+        if low <= low[1]
+            inside_pcl_hits += 1
+            if close < low[1]
+                inside_pcl_closes += 1
+
+        // Set bias for next candle based on current price action
+    if high > high[1] and low < low[1]  // Outside bar: no specific bias
+        bias := BIAS_NONE
+        outside_bar_samples += 1
+    else if high < high[1] and low > low[1]  // Inside bar bias based on up/downclose candle
+        // if bias == BIAS_PCH
+        //     bias := BIAS_INSIDE_PCH
+        //     inside_pch_samples += 1
+        // else if bias == BIAS_PCL
+        //     bias := BIAS_INSIDE_PCL
+        //     inside_pcl_samples += 1
+        if close > open
+            bias := BIAS_INSIDE_PCH
+            inside_pch_samples += 1
+        else if close < open
+            bias := BIAS_INSIDE_PCL
+            inside_pcl_samples += 1
+    else if close > high[1] or (low < low[1] and close > low[1] and high < high[1]) // Close above previous high or sweeps previous candle low and close inside
+        bias := BIAS_PCH
+        pch_samples += 1
+    else if close < low[1] or (high > high[1] and close < high[1] and low > low[1]) // Close below previous low or sweep previous candle high and close inside
+        bias := BIAS_PCL
+        pcl_samples += 1
+    else
+        bias := BIAS_NONE
+
+
+// Calculate Success Rates
+calc_percentage(successes, attempts) =>
+    attempts > 0 ? str.tostring((successes / attempts) * 100, "#.0") + "%" : "N/A"
+
+string pch_success_rate = calc_percentage(pch_hits, pch_samples)
+string pch_close_rate = calc_percentage(pch_closes, pch_hits)
+
+string pcl_success_rate = calc_percentage(pcl_hits, pcl_samples)
+string pcl_close_rate = calc_percentage(pcl_closes, pcl_hits)
+
+string inside_pch_success_rate = calc_percentage(inside_pch_hits, inside_pch_samples)
+string inside_pch_close_rate = calc_percentage(inside_pch_closes, inside_pch_hits)
+
+string inside_pcl_success_rate = calc_percentage(inside_pcl_hits, inside_pcl_samples)
+string inside_pcl_close_rate = calc_percentage(inside_pcl_closes, inside_pcl_hits)
+
+// Display Table
+var table stats_table = table.new(position.top_right, table_columns, table_rows, bgcolor=color.gray, frame_color=color.black, frame_width=1)
+if barstate.islast
+    total_samples = pch_samples + pcl_samples + inside_pch_samples + inside_pcl_samples + outside_bar_samples
+    table.cell(stats_table, 0, 0, syminfo.ticker + " Bias (" + timeframe.period + ")", text_color=color.white)
+    table.cell(stats_table, 1, 0, "Success Rate", text_color=color.white)
+    table.cell(stats_table, 2, 0, "Close Thru Rate", text_color=color.white)
+    table.cell(stats_table, 3, 0, "Sample Size (" + str.tostring(total_samples) + ")", text_color=color.white)
+
+    table.cell(stats_table, 0, 1, "PCH", text_color=color.white)
+    table.cell(stats_table, 1, 1, pch_success_rate, text_color=color.white)
+    table.cell(stats_table, 2, 1, pch_close_rate, text_color=color.white)
+    table.cell(stats_table, 3, 1, str.tostring(pch_samples), text_color=color.white)
+
+    table.cell(stats_table, 0, 2, "PCL", text_color=color.white)
+    table.cell(stats_table, 1, 2, pcl_success_rate, text_color=color.white)
+    table.cell(stats_table, 2, 2, pcl_close_rate, text_color=color.white)
+    table.cell(stats_table, 3, 2, str.tostring(pcl_samples), text_color=color.white)
+
+    table.cell(stats_table, 0, 3, "Inside PCH", text_color=color.white)
+    table.cell(stats_table, 1, 3, inside_pch_success_rate, text_color=color.white)
+    table.cell(stats_table, 2, 3, inside_pch_close_rate, text_color=color.white)
+    table.cell(stats_table, 3, 3, str.tostring(inside_pch_samples), text_color=color.white)
+
+    table.cell(stats_table, 0, 4, "Inside PCL", text_color=color.white)
+    table.cell(stats_table, 1, 4, inside_pcl_success_rate, text_color=color.white)
+    table.cell(stats_table, 2, 4, inside_pcl_close_rate, text_color=color.white)
+    table.cell(stats_table, 3, 4, str.tostring(inside_pcl_samples), text_color=color.white)
+
+    table.cell(stats_table, 0, 5, "Outside Bar", text_color=color.white)
+    table.cell(stats_table, 1, 5, "N/A", text_color=color.white)  // No success rate for outside bar
+    table.cell(stats_table, 2, 5, "N/A", text_color=color.white)  // No close thru rate for outside bar
+    table.cell(stats_table, 3, 5, str.tostring(outside_bar_samples), text_color=color.white)

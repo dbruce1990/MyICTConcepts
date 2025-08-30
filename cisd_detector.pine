@@ -1,0 +1,456 @@
+//@version=6
+indicator("CISD Detector", overlay=true, max_lines_count=100, max_labels_count=100)
+
+// ========================================================================
+// CISD DETECTOR - Standalone Indicator
+// Purpose: Detect Change in State of Delivery (CISD) based on swing sweeps
+// Logic: Swing gets swept → Find delivery candles → Mark opening price → Wait for close-through
+// ========================================================================
+
+// === TYPES ===
+
+type SwingPoint
+    int xBar
+    int xTime
+    float y
+    string state // "active"
+
+type PotentialCISD
+    int swingIdx1 // index of first swing in sequence (H or L)
+    int swingIdx2 // index of second swing (L or H)
+    int swingIdx3 // index of third swing (HH or LL)
+    string direction // "bearish" or "bullish"
+    int[] deliveryCandles
+    float openingPriceLevel
+    int confirmBar = na
+    int confirmTime = na
+    string state // "active", "confirmed", "invalidated"
+
+
+type CISDLevel
+    float level
+    int xBar
+    int xTime
+    bool isHigh
+    int creationBar = na                   // When CISD was actually created
+    int creationTime = na                  // When CISD was actually created
+    string state // "created" (only valid state - no "active" until close-through)
+    line levelLine = na
+    label levelLabel = na
+
+var swingHighs = array.new<SwingPoint>()
+var swingLows = array.new<SwingPoint>()
+var cisdLevels = array.new<CISDLevel>()
+var potentialCISDs = array.new<PotentialCISD>()
+
+// === SETTINGS ===
+inputGroupDisplay = "Display"
+showCISDLevels = input.bool(true, "Show CISD Levels", group=inputGroupDisplay, tooltip="Show created CISD levels (only after close-through validation).")
+showTriggeredCISDs = input.bool(false, "Show Triggered CISDs", group=inputGroupDisplay, tooltip="Legacy setting - not used in new logic.")
+maxCISDLevels = input.int(5, "Max CISD Levels", minval=1, maxval=20, group=inputGroupDisplay, tooltip="Maximum number of CISD levels to display.")
+showSwingPoints = input.bool(true, "Show Swing Points", group=inputGroupDisplay, tooltip="Show underlying swing points for reference.")
+showDebugInfo = input.bool(false, "Show Debug Info", group=inputGroupDisplay, tooltip="Show debug table with CISD statistics")
+
+// Visual Settings
+inputGroupVisual = "Styling"
+cisdLevelColor = input.color(color.purple, "CISD Level Color", group=inputGroupVisual, tooltip="Color for active CISD opening price levels.")
+triggeredCisdColor = input.color(color.orange, "Triggered CISD Color", group=inputGroupVisual, tooltip="Color for triggered CISD levels.")
+cisdLineStyle = input.string("solid", "CISD Line Style", options=["solid", "dashed", "dotted"], group=inputGroupVisual, tooltip="Line style for CISD levels.")
+cisdLineWidth = input.int(2, "CISD Line Width", minval=1, maxval=5, group=inputGroupVisual, tooltip="Line thickness for CISD levels.")
+showCisdLabels = input.bool(true, "Show CISD Labels", group=inputGroupVisual, tooltip="Show labels on CISD levels.")
+showSwingSequence = input.bool(false, "Show Swing Sequence", group=inputGroupVisual, tooltip="Show labels indicating swing point order (for debugging).")
+
+// === HELPER FUNCTIONS ===
+findDeliveryCandles(oldSwingPoint, newSwingPoint) =>
+    // Find the series of candles between two swing points that caused the sweep
+    deliveryBars = array.new_int()
+    
+    if na(oldSwingPoint) or na(newSwingPoint)
+        deliveryBars
+    else
+        startBar = oldSwingPoint.xBar
+        endBar = newSwingPoint.xBar
+        isBreakingHigh = newSwingPoint.y > oldSwingPoint.y
+        
+        // Find the series of consecutive candles that match the direction and broke the level
+        foundFirst = false
+        
+        for i = 0 to (endBar - startBar)
+            checkBar = startBar + i
+            barsBack = bar_index - checkBar
+            
+            if barsBack >= 0 and barsBack < 500 // Safety check
+                if isBreakingHigh
+                    // For bearish CISD: look for upclose candles that broke above old swing high
+                    if close[barsBack] > open[barsBack] and high[barsBack] > oldSwingPoint.y
+                        if not foundFirst
+                            foundFirst := true
+                        array.push(deliveryBars, checkBar)
+                    else
+                        // If we found upclose candles but now hit a non-upclose, stop the series
+                        if foundFirst
+                            break
+                else
+                    // For bullish CISD: look for downclose candles that broke below old swing low  
+                    if close[barsBack] < open[barsBack] and low[barsBack] < oldSwingPoint.y
+                        if not foundFirst
+                            foundFirst := true
+                        array.push(deliveryBars, checkBar)
+                    else
+                        // If we found downclose candles but now hit a non-downclose, stop the series
+                        if foundFirst
+                            break
+        
+        deliveryBars
+
+getDeliveryOpeningPrice(deliveryCandles) =>
+    // Get the opening price of the FIRST delivery candle in the series
+    if array.size(deliveryCandles) == 0
+        na
+    else
+        firstBarIdx = array.get(deliveryCandles, 0)
+        barsBack = bar_index - firstBarIdx
+        if barsBack >= 0 and barsBack < 500 // Safety check
+            open[barsBack]
+        else
+            na
+
+// === SWING DETECTION ===
+if barstate.isconfirmed
+    var float prevHigh = na
+    var float prevLow = na
+    
+    // Simple current timeframe swing detection (3-bar pivots)
+    isSwingHigh = high[1] > high[2] and high[1] > high[0]
+    if isSwingHigh and (na(prevHigh) or high[1] != prevHigh)
+        swing = SwingPoint.new()
+        swing.y := high[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        array.push(swingHighs, swing)
+        prevHigh := high[1]
+    
+    // Detect swing lows  
+    isSwingLow = low[1] < low[2] and low[1] < low[0]
+    if isSwingLow and (na(prevLow) or low[1] != prevLow)
+        swing = SwingPoint.new()
+        swing.y := low[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        array.push(swingLows, swing)
+        prevLow := low[1]
+
+
+// === CISD DETECTION (with PotentialCISD array) ===
+if barstate.isconfirmed
+    // 1. Invalidate/confirm all active potential CISDs
+    for i = 0 to array.size(potentialCISDs) - 1
+        cisd = array.get(potentialCISDs, i)
+        if cisd.state == "active"
+            // Invalidation: If a new invalidating swing occurs before confirmation
+            if cisd.direction == "bearish" and array.size(swingHighs) > cisd.swingIdx3 + 1
+                // Any swing high after the HH that is higher than the HH
+                for j = cisd.swingIdx3 + 1 to array.size(swingHighs) - 1
+                    h = array.get(swingHighs, j)
+                    hh = array.get(swingHighs, cisd.swingIdx3)
+                    if h.y > hh.y
+                        cisd.state := "invalidated"
+                        array.set(potentialCISDs, i, cisd)
+                        break
+            if cisd.direction == "bullish" and array.size(swingLows) > cisd.swingIdx3 + 1
+                // Any swing low after the LL that is lower than the LL
+                for j = cisd.swingIdx3 + 1 to array.size(swingLows) - 1
+                    l = array.get(swingLows, j)
+                    ll = array.get(swingLows, cisd.swingIdx3)
+                    if l.y < ll.y
+                        cisd.state := "invalidated"
+                        array.set(potentialCISDs, i, cisd)
+                        break
+            // Confirmation: If close-through occurs before invalidation
+            if cisd.state == "active"
+                if cisd.direction == "bearish"
+                    if close < cisd.openingPriceLevel
+                        cisd.state := "confirmed"
+                        cisd.confirmBar := bar_index
+                        cisd.confirmTime := time
+                        array.set(potentialCISDs, i, cisd)
+                        // Add to CISD levels for visualization
+                        cisdLevel = CISDLevel.new()
+                        cisdLevel.level := cisd.openingPriceLevel
+                        if array.size(swingHighs) > cisd.swingIdx3
+                            cisdLevel.xBar := array.get(swingHighs, cisd.swingIdx3).xBar
+                            cisdLevel.xTime := array.get(swingHighs, cisd.swingIdx3).xTime
+                        else
+                            cisdLevel.xBar := na
+                            cisdLevel.xTime := na
+                        cisdLevel.isHigh := true
+                        cisdLevel.state := "created"
+                        cisdLevel.creationBar := bar_index
+                        cisdLevel.creationTime := time
+                        array.push(cisdLevels, cisdLevel)
+                if cisd.direction == "bullish"
+                    if close > cisd.openingPriceLevel
+                        cisd.state := "confirmed"
+                        cisd.confirmBar := bar_index
+                        cisd.confirmTime := time
+                        array.set(potentialCISDs, i, cisd)
+                        // Add to CISD levels for visualization
+                        cisdLevel = CISDLevel.new()
+                        cisdLevel.level := cisd.openingPriceLevel
+                        if array.size(swingLows) > cisd.swingIdx3
+                            cisdLevel.xBar := array.get(swingLows, cisd.swingIdx3).xBar
+                            cisdLevel.xTime := array.get(swingLows, cisd.swingIdx3).xTime
+                        else
+                            cisdLevel.xBar := na
+                            cisdLevel.xTime := na
+                        cisdLevel.isHigh := false
+                        cisdLevel.state := "created"
+                        cisdLevel.creationBar := bar_index
+                        cisdLevel.creationTime := time
+                        array.push(cisdLevels, cisdLevel)
+
+    // 2. Detect new potential CISDs (H-L-HH or L-H-LL)
+    // Bearish: H-L-HH
+    if array.size(swingHighs) >= 2 and array.size(swingLows) >= 1
+        // Find the last 3 pivots: H (idx1), L (idx2), HH (idx3)
+        idx3 = array.size(swingHighs) - 1
+        idx2 = array.size(swingLows) - 1
+        idx1 = idx2 > 0 ? idx2 - 1 : na
+        if not na(idx1) and array.size(swingHighs) > idx1 and array.size(swingLows) > idx2 and array.size(swingHighs) > idx3
+            h1 = array.get(swingHighs, idx1)
+            l = array.get(swingLows, idx2)
+            hh = array.get(swingHighs, idx3)
+            // Sequence: H-L-HH
+            if h1.xBar < l.xBar and l.xBar < hh.xBar and hh.y > h1.y and hh.y > l.y
+                // Only add if not already present (avoid duplicates)
+                alreadyExists = false
+                for i = 0 to array.size(potentialCISDs) - 1
+                    cisd = array.get(potentialCISDs, i)
+                    if cisd.swingIdx1 == idx1 and cisd.swingIdx2 == idx2 and cisd.swingIdx3 == idx3 and cisd.direction == "bearish"
+                        alreadyExists := true
+                        break
+                if not alreadyExists
+                    deliveryCandles = findDeliveryCandles(l, hh)
+                    openingPrice = getDeliveryOpeningPrice(deliveryCandles)
+                    if not na(openingPrice)
+                        cisd = PotentialCISD.new()
+                        cisd.swingIdx1 := idx1
+                        cisd.swingIdx2 := idx2
+                        cisd.swingIdx3 := idx3
+                        cisd.direction := "bearish"
+                        cisd.deliveryCandles := deliveryCandles
+                        cisd.openingPriceLevel := openingPrice
+                        cisd.state := "active"
+                        array.push(potentialCISDs, cisd)
+
+    // Bullish: L-H-LL
+    if array.size(swingLows) >= 2 and array.size(swingHighs) >= 1
+        idx3 = array.size(swingLows) - 1
+        idx2 = array.size(swingHighs) - 1
+        idx1 = idx2 > 0 ? idx2 - 1 : na
+        if not na(idx1) and array.size(swingLows) > idx1 and array.size(swingHighs) > idx2 and array.size(swingLows) > idx3
+            l1 = array.get(swingLows, idx1)
+            h = array.get(swingHighs, idx2)
+            ll = array.get(swingLows, idx3)
+            // Sequence: L-H-LL
+            if l1.xBar < h.xBar and h.xBar < ll.xBar and ll.y < l1.y and ll.y < h.y
+                alreadyExists = false
+                for i = 0 to array.size(potentialCISDs) - 1
+                    cisd = array.get(potentialCISDs, i)
+                    if cisd.swingIdx1 == idx1 and cisd.swingIdx2 == idx2 and cisd.swingIdx3 == idx3 and cisd.direction == "bullish"
+                        alreadyExists := true
+                        break
+                if not alreadyExists
+                    deliveryCandles = findDeliveryCandles(h, ll)
+                    openingPrice = getDeliveryOpeningPrice(deliveryCandles)
+                    if not na(openingPrice)
+                        cisd = PotentialCISD.new()
+                        cisd.swingIdx1 := idx1
+                        cisd.swingIdx2 := idx2
+                        cisd.swingIdx3 := idx3
+                        cisd.direction := "bullish"
+                        cisd.deliveryCandles := deliveryCandles
+                        cisd.openingPriceLevel := openingPrice
+                        cisd.state := "active"
+                        array.push(potentialCISDs, cisd)
+
+// === ARRAY MANAGEMENT ===
+// Keep arrays at reasonable sizes for performance
+if array.size(swingHighs) > 50
+    array.shift(swingHighs)
+if array.size(swingLows) > 50
+    array.shift(swingLows)
+if array.size(cisdLevels) > 20
+    oldLevel = array.shift(cisdLevels)
+    if not na(oldLevel.levelLine)
+        line.delete(oldLevel.levelLine)
+    if not na(oldLevel.levelLabel)
+        label.delete(oldLevel.levelLabel)
+
+// === RENDERING ===
+getLineStyle() =>
+    switch cisdLineStyle
+        "solid" => line.style_solid
+        "dashed" => line.style_dashed
+        "dotted" => line.style_dotted
+        => line.style_solid
+
+// Render CISD levels
+if showCISDLevels
+    if array.size(cisdLevels) > 0
+        activeLevels = 0
+        
+        for i = array.size(cisdLevels) - 1 to 0 // Process newest first
+            cisdLevel = array.get(cisdLevels, i)
+            showLevel = false
+            lineColor = color(na)
+            
+            if cisdLevel.state == "created" and showCISDLevels and activeLevels < maxCISDLevels
+                showLevel := true
+                lineColor := cisdLevelColor
+                activeLevels += 1
+            
+            if showLevel
+                // For CISD lines: draw from first delivery candle to CISD creation bar
+                x1 = cisdLevel.xTime  // This should be the time of the first delivery candle
+                x2 = cisdLevel.creationTime  // This is when CISD was confirmed
+                
+                // If we don't have delivery candle timing, use the swing point time as fallback
+                if na(x1)
+                    x1 := cisdLevel.xTime
+                
+                if na(cisdLevel.levelLine)
+                    cisdLevel.levelLine := line.new(x1=x1, y1=cisdLevel.level, x2=x2, y2=cisdLevel.level, color=lineColor, width=cisdLineWidth, style=getLineStyle(), xloc=xloc.bar_time)
+                else
+                    line.set_x1(cisdLevel.levelLine, x1)
+                    line.set_x2(cisdLevel.levelLine, x2)
+                    line.set_color(cisdLevel.levelLine, lineColor)
+                
+                // Add label at the end of the line (confirmation point)
+                if showCisdLabels and na(cisdLevel.levelLabel)
+                    labelText = "CISD " + (cisdLevel.isHigh ? "↓" : "↑") + " " + str.tostring(cisdLevel.level, "#.####")
+                    labelStyle = cisdLevel.isHigh ? label.style_label_down : label.style_label_up
+                    cisdLevel.levelLabel := label.new(x=x2, y=cisdLevel.level, text=labelText, color=color.new(color.white, 100), textcolor=lineColor, style=labelStyle, size=size.small, xloc=xloc.bar_time)
+                
+                array.set(cisdLevels, i, cisdLevel)
+            else
+                // Clean up unused drawing objects
+                if not na(cisdLevel.levelLine)
+                    line.delete(cisdLevel.levelLine)
+                    cisdLevel.levelLine := na
+                if not na(cisdLevel.levelLabel)
+                    label.delete(cisdLevel.levelLabel)
+                    cisdLevel.levelLabel := na
+                array.set(cisdLevels, i, cisdLevel)
+
+// Show swing points for reference (optional)
+// Note: plotshape must be in global scope, so we use conditional logic inside
+var float swingHighToShow = na
+var float swingLowToShow = na
+var color swingHighColor = color(na)
+var color swingLowColor = color(na)
+
+// Check if current bar is the swing point bar itself (not the confirmation bar)
+isSwingHighBar = false
+isSwingLowBar = false
+var float currentSwingHigh = na
+var float currentSwingLow = na
+
+if showSwingPoints
+    // Reset values
+    currentSwingHigh := na
+    currentSwingLow := na
+
+// Alternative approach: Show swings on their actual bars using a different method
+var bool showSwingHigh = false
+var bool showSwingLow = false
+
+if showSwingPoints and bar_index >= 2
+    // Check if the previous bar (bar[1]) was a swing point that just got confirmed
+    showSwingHigh := high[1] > high[2] and high[1] > high[0]
+    showSwingLow := low[1] < low[2] and low[1] < low[0]
+
+// Set values for plotshape - show on the actual swing bar by offsetting
+swingHighToShow := showSwingHigh ? high[1] : na  // Show previous bar's high if it was a swing
+swingLowToShow := showSwingLow ? low[1] : na     // Show previous bar's low if it was a swing
+swingHighColor := showSwingHigh ? color.red : na
+swingLowColor := showSwingLow ? color.blue : na
+
+// Global scope plotshape calls - these will plot at the current bar but show previous bar's values
+// To truly fix the offset, we need to use offset parameter
+plotshape(swingHighToShow, "SH", shape.triangledown, location.absolute, swingHighColor, size=size.small, offset=-1)
+plotshape(swingLowToShow, "SL", shape.triangleup, location.absolute, swingLowColor, size=size.small, offset=-1)
+
+// === STATISTICS ===
+totalCisdLevels = array.size(cisdLevels)
+createdCisdCount = 0
+
+if array.size(cisdLevels) > 0
+    for i = 0 to array.size(cisdLevels) - 1
+        cisd = array.get(cisdLevels, i)
+        if cisd.state == "created"
+            createdCisdCount += 1
+
+// === DEBUG INFO ===
+var table debugTable = na
+if showDebugInfo
+    if barstate.islast
+        if na(debugTable)
+            debugTable := table.new(position.top_right, 2, 10, bgcolor=color.new(color.white, 80), border_width=1)
+            
+        // Clear table
+        table.clear(debugTable, 0, 0, 1, 9)
+        
+        // Headers
+        table.cell(debugTable, 0, 0, "CISD Debug", text_color=color.black, text_size=size.small)
+        table.cell(debugTable, 1, 0, "Values", text_color=color.black, text_size=size.small)
+        
+        // Stats
+        table.cell(debugTable, 0, 1, "Total Swings High", text_color=color.black, text_size=size.tiny)
+        table.cell(debugTable, 1, 1, str.tostring(array.size(swingHighs)), text_color=color.black, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 2, "Total Swings Low", text_color=color.black, text_size=size.tiny)
+        table.cell(debugTable, 1, 2, str.tostring(array.size(swingLows)), text_color=color.black, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 3, "Created CISDs", text_color=color.black, text_size=size.tiny)
+        table.cell(debugTable, 1, 3, str.tostring(createdCisdCount), text_color=color.black, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 4, "Potential CISDs", text_color=color.black, text_size=size.tiny)
+        potentialCisdCount = 0
+        bearishPotential = 0
+        bullishPotential = 0
+        if array.size(potentialCISDs) > 0
+            for i = 0 to array.size(potentialCISDs) - 1
+                cisd = array.get(potentialCISDs, i)
+                if cisd.state == "active"
+                    potentialCisdCount += 1
+                    if cisd.direction == "bearish"
+                        bearishPotential += 1
+                    if cisd.direction == "bullish"
+                        bullishPotential += 1
+        table.cell(debugTable, 1, 4, str.tostring(potentialCisdCount) + " (↓" + str.tostring(bearishPotential) + " ↑" + str.tostring(bullishPotential) + ")", text_color=color.black, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 5, "Invalidated CISDs", text_color=color.black, text_size=size.tiny)
+        invalidatedCisdCount = 0
+        if array.size(swingHighs) > 0
+            for i = 0 to array.size(swingHighs) - 1
+                swing = array.get(swingHighs, i)
+                if swing.state == "invalidated"
+                    invalidatedCisdCount += 1
+        if array.size(swingLows) > 0
+            for i = 0 to array.size(swingLows) - 1
+                swing = array.get(swingLows, i)
+                if swing.state == "invalidated"
+                    invalidatedCisdCount += 1
+        table.cell(debugTable, 1, 5, str.tostring(invalidatedCisdCount), text_color=color.black, text_size=size.tiny)
+        
+        // Show last CISD level created if any
+        if array.size(cisdLevels) > 0
+            lastCisd = array.get(cisdLevels, array.size(cisdLevels) - 1)
+            table.cell(debugTable, 0, 6, "Last CISD", text_color=color.black, text_size=size.tiny)
+            table.cell(debugTable, 1, 6, str.tostring(lastCisd.level, "#.####") + " (" + lastCisd.state + ")", text_color=color.black, text_size=size.tiny)
+
+plot(createdCisdCount, "Created CISDs", color=cisdLevelColor, display=display.data_window)
+plot(totalCisdLevels, "Total CISDs", color=color.gray, display=display.data_window)

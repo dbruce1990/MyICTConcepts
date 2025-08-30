@@ -1,0 +1,26 @@
+# Swing High & Low
+
+### **Understanding Swing Highs & Lows**
+
+The market must form a swing high or low in order for price to reverse; there is no other way. Using that understanding is the foundation of the TTrades Model.
+
+There are 3 candles that form a swing high or low. The focus will be on those 3 candles with the 3rd and 4th candles having potential opportunity following the swing high or low.
+
+**Numbering Candles**
+
+Candle 1 will always be the candle before the high or low
+
+Candle 2 will always be the candle that forms the high or low
+
+Candle 3 will always be the candle following the high or low
+
+Candle 4 will always be the candle following candle 3
+
+Below is an example of numbering the candles:
+
+[](.images/099fb2ae-ff95-4a00-99ca-63e892578800.png)
+
+The next two sections will discuss the two types of candle closures used to anticipate a swing formation.
+
+> This is the end of the Swing High & Low lesson
+>

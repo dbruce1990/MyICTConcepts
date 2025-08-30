@@ -1,0 +1,34 @@
+# Projections
+
+### **Determining Targets**
+
+As discussed in the previous lesson, equilibrium and liquidity can be used both as trade objectives and points of interest for a potential reversal. For the TTrades Model, the main focus for identifying targets is highs and lows and pairing with standard deviation projections.
+
+There are two ways to project the reversal:
+
+**Manipulation Projection**
+
+Anchoring the projection will be done this way in the majority of scenarios:
+
+Bullish: low to the previous high which made the highest high
+
+Bearish: high to the previous low which made the lowest low
+
+[](.images/94a98546-b6d7-4717-44a5-b1969b23d500.png)
+
+**Failure Swing Projection**
+
+The projection changes in certain scenarios when the manipulation leg is large. What is a large manipulation leg? When the projection is far overextended from any price logical objective for candle 3 or 4 to reach.
+
+Bullish: lowest low to the high which formed the failure swing
+
+Bearish: highest high to the low which formed the failure swing
+
+[](.images/cda8e8b7-673a-4ef8-b676-a4d6c2531200.png)
+
+Below is the settings for the fibonacci retracement tool:
+
+[](.images/b93aea37-9388-431a-7671-29dda1a29900.png)
+
+> This is the end of the Projections lesson
+>

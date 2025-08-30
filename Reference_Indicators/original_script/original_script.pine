@@ -1,0 +1,425 @@
+//@version=5
+indicator("My ICT Concepts", overlay=true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, max_bars_back = 5000)
+redrawFVGUnbalancedArea = input.bool(false, "Adjust FVG to remaining imbalance?", "As price taps into an imblalance (FVG), redraw the box to show the remaining unbalanced area.")
+adjustFVGTransparencyByVolume = input.bool(false, "Adjust FVG Transparency", "Use the FVG candle 2's volume to adjust the box's transparency. More volume will be less transparent, less volume will be more transparent.")
+showFVG = input.bool(true, "Show FVG's")
+removeMitigatedFVGDrawings = input.bool(true, "Remove Balanced FVG's", "Remove FVG box once balanced.")
+
+// IMBALANCES BEGIN
+type FVG
+    int xLow
+    int xHigh
+    int xLowTime
+    int xHighTime
+    float yLow
+    float yHigh
+    int mitigatedTime
+    float unmitigatedY = 0.0
+    bool mitigated = false
+    box fvgBox = na
+    float vol
+
+var float volumeScale = 1.0 // Adjust this scale to control the transparency effect
+var float minVol = 0
+var float maxVol = 0
+var int maxImbalances = 200
+
+var BISIs = array.new<FVG>()
+var SIBIs = array.new<FVG>()
+
+// Normalize volume to calculate transparency of FVG
+getTransparency(float vol) =>
+    transparency = (vol - minVol) / (maxVol-minVol) * 100
+    log.info(str.tostring(vol) + "   " + str.tostring(95 - transparency))
+    95 - transparency
+
+cleanupFVGs(array<FVG> fvgArray) =>
+    if array.size(fvgArray) >= maxImbalances
+        fvg = array.shift(fvgArray)
+        msg = "Deleting FVG."
+        if not na(fvg.fvgBox)
+            msg += "Deleting FVG Box."
+            box.delete(fvg.fvgBox)
+        log.info(msg)
+
+renderFVGs(array<FVG> fvgs, color boxColor, bool isBullish) =>
+    if array.size(fvgs) == 0
+        false
+    else
+        for i = 0 to array.size(fvgs) - 1
+            fvg = array.get(fvgs, i)
+            // Check if FVG has been mitigated
+            prevUnmitigatedY = fvg.unmitigatedY == 0 ? (isBullish ? fvg.yHigh : fvg.yLow) : fvg.unmitigatedY
+            if not fvg.mitigated
+                mitigatedY = isBullish ? low <= prevUnmitigatedY : high >= prevUnmitigatedY
+                if (mitigatedY)
+                    fvg.unmitigatedY := (isBullish ? low : high)
+                fullyMitigated = isBullish ? fvg.unmitigatedY <= fvg.yLow : fvg.unmitigatedY >= fvg.yHigh
+                if (fullyMitigated)
+                    fvg.mitigatedTime := time
+                    fvg.mitigated := true
+                    fvg.unmitigatedY := prevUnmitigatedY
+                    
+            // Render FVG
+            boxRightTime = time + (time - time[2])
+            if na(fvg.fvgBox)
+                boxLeftTime = isBullish ? fvg.xLowTime : fvg.xHighTime
+                fillColor = color.new(boxColor, adjustFVGTransparencyByVolume ? getTransparency(fvg.vol) : 80)
+                fvg.fvgBox := box.new(xloc = xloc.bar_time, left = boxLeftTime, right = boxRightTime, top = fvg.yHigh, bottom = fvg.yLow, border_color = fillColor, bgcolor = fillColor)
+            else
+                box.set_right(fvg.fvgBox, fvg.mitigated ? fvg.mitigatedTime : boxRightTime)
+                if redrawFVGUnbalancedArea
+                    if isBullish
+                        box.set_top(fvg.fvgBox, fvg.unmitigatedY)
+                    else
+                        box.set_bottom(fvg.fvgBox, fvg.unmitigatedY)
+                        
+            if removeMitigatedFVGDrawings and fvg.mitigated
+                fvg.fvgBox.delete()
+            array.set(fvgs, i, fvg)
+        true
+
+if barstate.isconfirmed    
+    // bisiFVG = high[2] < low and close[1] >= low and open[1] <= high[2]
+    // sibiFVG = low[2] > high and close[1] <= high and open[1] >= low[2]
+    bisiFVG = high[2] < low
+    sibiFVG = low[2] > high
+
+    if bisiFVG
+    // if high[2] < low
+        bisi = FVG.new()
+        bisi.xLow := bar_index[2]
+        bisi.xHigh := bar_index
+        bisi.xLowTime := time[2]
+        bisi.xHighTime := time
+        bisi.yLow := high[2]
+        bisi.yHigh := low
+        bisi.vol := volume[1]
+        if bisi.vol > maxVol
+            maxVol := bisi.vol
+        if bisi.vol < minVol
+            minVol := bisi.vol
+        array.push(BISIs, bisi)
+
+    if sibiFVG
+    // if low[2] > high
+        sibi = FVG.new()
+        sibi.xLow := bar_index
+        sibi.xHigh := bar_index[2]
+        sibi.xLowTime := time
+        sibi.xHighTime := time[2]
+        sibi.yLow := high
+        sibi.yHigh := low[2]
+        sibi.vol := volume[1]
+        if sibi.vol > maxVol
+            maxVol := sibi.vol
+        if sibi.vol < minVol
+            minVol := sibi.vol
+        array.push(SIBIs, sibi)
+
+    // Clean up old FVGs
+    cleanupFVGs(BISIs)
+    cleanupFVGs(SIBIs)
+
+    // Render FVG's
+    if showFVG
+        renderFVGs(BISIs, #ff9800, true)
+        renderFVGs(SIBIs, #f23645, false)
+
+// SWING POINTS / MARKET STRUCTURE BEGIN
+showSwingLines = input.bool(true, "Show Swing Point Lines")
+removeMitigatedSwingLines = input.bool(true, "Remove Mitigated Swing Point Lines")
+// removeSweptUnmitigatedSwingLines = input.bool(false, "Remove Swept but not closed through Swing Point Lines")
+var int maxSwingPoints = 249
+
+type SwingPoint
+    int xBar // bar index
+    int xTime
+    float y // swing price
+    bool mitigated = false
+    int mitigatedXTime // opening time of bar that mitigated price
+    int mitigatedX // index of bar that mitigated price
+    bool mss = false //set true when a mss occurs
+    int mssXID // bar which mss occured
+    int mssXTime
+    float mssY //
+    string mssTxt
+    int swingType = 1 // 1 = short term, 2 = intermediate term, 3 = long term
+    line lineDrawing = na
+    bool swept = false // trades over but doesn't close
+    bool isStructural = false
+    bool isStructureChange = true
+    label structureLabel = na
+    string labelTxt = na
+
+    // Idea/TODO: implement swept and mitigated logic fully. So when the swing point is swept, it would be as the current mitigated logic is...meaning it stops drawing the line. However, if it's just swept but not closed over, the line could become dotted (or draw a second line over it until closed beyond)
+
+var swingHighs = array.new<SwingPoint>()
+var swingLows = array.new<SwingPoint>()
+
+swingHighPrice =  high[2] <= high[1] and high < high[1] ? high[1] : na
+swingLowPrice = low[2] >= low[1] and low > low[1] ? low[1] : na
+
+//Render and update swing points
+updateSwingPoints(array<SwingPoint> swingPoints, color lineColor, bool isSwingHigh) => 
+    for swing in swingPoints
+        if swing.mitigated
+            if removeMitigatedSwingLines
+                line.delete(swing.lineDrawing)
+            false
+        else if swing.swept
+            false
+        else
+            isMitigated = isSwingHigh ? close > swing.y : close < swing.y
+            isSwept = isSwingHigh ? high > swing.y : low < swing.y
+            x2Time = time + (time - time[2])
+
+            if isMitigated //is closed beyond
+                swing.mitigated := true
+                swing.mitigatedXTime := time
+                swing.mitigatedX := bar_index
+            if isSwept
+                swing.swept := true
+            if na(swing.lineDrawing)
+                swing.lineDrawing := line.new(x1= swing.xTime, y1 = swing.y, x2 = x2Time, y2 = swing.y, style = line.style_solid, color = lineColor, xloc = xloc.bar_time, width = 1)
+            else
+                line.set_x2(swing.lineDrawing, swing.mitigated ? swing.mitigatedXTime : x2Time)
+                if swing.swept and not swing.mitigated
+                    line.set_style(swing.lineDrawing, line.style_dashed)
+        // if swing.isStructural and na(swing.structureLabel)
+        //     labelStyle = isSwingHigh ? label.style_triangledown : label.style_triangleup
+        //     labelPosition = isSwingHigh ? yloc.abovebar : yloc.belowbar
+        //     labelColor = isSwingHigh ? color.red : color.green
+        //     txt = not na(swing.labelTxt) ? swing.labelTxt : ""
+        //     swing.structureLabel := label.new(xloc = xloc.bar_time,  x = swing.xTime, y = swing.y, yloc = labelPosition, style = labelStyle, size = size.auto, color = labelColor, text = txt)
+            true
+
+// Clean up swing points
+cleanupSwingPoints(array<SwingPoint> swingPoints) =>
+    if array.size(swingPoints) > maxSwingPoints
+        swing = array.shift(swingPoints)
+        if not na(swing.lineDrawing)
+            line.delete(swing.lineDrawing)
+        if not na(swing.structureLabel)
+            label.delete(swing.structureLabel)
+
+if barstate.isconfirmed
+    //swing highs
+    if high < high[1] and high[1] >= high[2]
+        swing = SwingPoint.new()
+        swing.y := high[1]
+        swing.xTime := time[1]
+
+        // if array.size(swingHighs) == 0
+        //     swing.isStructural := true
+        // else if array.size(swingLows) > 1
+        //     prevSwingHigh = array.get(swingHighs, array.size(swingHighs) - 1)
+        //     lastSwingLow = array.get(swingLows, array.size(swingLows) - 1)
+        //     prevSwingLow = array.get(swingLows, array.size(swingLows) - 2)
+        //     h_hh = (swing.y > prevSwingHigh.y) and (prevSwingHigh.xTime > lastSwingLow.xTime) //prev high occurs after last low...so we have high and higher high, but not high low higher high
+        //     h_l_hh = (swing.y > prevSwingHigh.y) and (prevSwingHigh.xTime < lastSwingLow.xTime) //higher high where we have a high, low, higher high and the hh occurs before the low in sequence
+        //     l_h_ll_lh = (swing.y < prevSwingHigh.y) and ((lastSwingLow.xTime > prevSwingHigh.xTime) and (prevSwingHigh.xTime > prevSwingLow.xTime))  // failure swing...not actually looking for lower low, don't know if i need it...yet can add a check later for lower low
+        //     if h_hh
+        //         swing.isStructural := true
+        //         prevSwingHigh.isStructural := false
+        //         label.delete(prevSwingHigh.structureLabel)
+        //         swing.labelTxt := "H_HH"
+        //     else if h_l_hh
+        //         swing.isStructural := true
+        //         swing.labelTxt := "H_L_HH"
+        //     else if l_h_ll_lh
+        //         swing.isStructural := true
+        //         swing.labelTxt := "Failure Swing"
+            // else if swing.y > prevSwingHigh.xTime and lastSwingLow.xTime < prevSwingHigh.xTime and prevSwingHigh.isStructural
+            //     swing.isStructural := true
+            //     prevSwingHigh.isStructural := false
+            // else // no swing lows to go off
+            //     if swing.y 
+        array.push(swingHighs, swing)
+    //swing lows
+    if low > low[1] and low[1] <= low[2]
+        swing = SwingPoint.new()
+        swing.y := low[1]
+        swing.xTime := time[1]
+        // if array.size(swingLows) == 0
+        //     swing.isStructural := true
+        // else if array.size(swingHighs) > 1
+        //     prevSwingLow = array.get(swingLows, array.size(swingLows) - 1)
+        //     lastSwingHigh = array.get(swingHighs, array.size(swingHighs) - 1)
+        //     prevSwingHigh = array.get(swingHighs, array.size(swingHighs) - 2)
+        //     l_ll = (swing.y < prevSwingLow.y) and (lastSwingHigh.xTime < prevSwingLow.xTime) //last low occurs without putting in new high...so we have low and lower low, but not low, high, lower low, so the structural swing low wasn't put in yet
+        //     l_h_ll = (swing.y < prevSwingLow.y) and (prevSwingLow.xTime < prevSwingHigh.xTime) // lower low and prevhigh occurs before the prevlow so sequence would be a low, high, lower low.
+        //     h_l_hh_ll = (swing.y > prevSwingLow.y) and (lastSwingHigh.xTime > prevSwingLow.xTime) and (prevSwingLow.xTime > lastSwingHigh.xTime) // failure swing...not looking for higher high, but can add later if needed...
+        //     if l_ll
+        //         swing.isStructural := true
+        //         prevSwingLow.isStructural := false
+        //         label.delete(prevSwingLow.structureLabel)
+        //         swing.labelTxt := "L_LL"
+        //     else if l_h_ll
+        //         swing.isStructural := true
+        //         swing.labelTxt := "L_H_LL"
+        //     else if h_l_hh_ll
+        //         swing.isStructural := true
+        //         swing.labelTxt := "Failure Swing"
+        array.push(swingLows, swing)
+
+
+    // Clean up old swing points
+    // cleanupSwingPoints(swingHighs)
+    // cleanupSwingPoints(swingLows)
+
+    if showSwingLines
+        updateSwingPoints(swingHighs, color.red , true)
+        updateSwingPoints(swingLows, color.green, false)
+
+// CISD BEGIN
+type CISD
+    int xBar
+    int xTime
+    float y
+    line lineDrawing = na
+    bool invalidated = false
+    int xInvalidationTime
+
+var bearishCISDs = array.new<CISD>()
+var bullishCISDs = array.new<CISD>()
+
+type OHLC
+    float o
+    float h
+    float l
+    float c
+    int xBar
+    int xTime
+
+showCISD = input.bool(false, "Show CISD")
+if barstate.isconfirmed and showCISD
+    SwingPoint lastSwingHigh = na
+    SwingPoint prevSwingHigh = na
+    SwingPoint lastSwingLow = na
+    SwingPoint prevSwingLow = na
+
+    if array.size(swingHighs) >= 2 and array.size(swingLows) >= 2
+        lastSwingHigh := array.get(swingHighs, array.size(swingHighs) - 1)
+        prevSwingHigh := array.get(swingHighs, array.size(swingHighs) - 2)
+        lastSwingLow := array.get(swingLows, array.size(swingLows) - 1)
+        prevSwingLow := array.get(swingLows, array.size(swingLows) - 2)
+
+        bearishBreakerSwing = (lastSwingHigh.y > prevSwingHigh.y) and (lastSwingLow.y < prevSwingLow.y) and
+         ((lastSwingHigh.xTime < lastSwingLow.xTime) and (lastSwingHigh.xTime > prevSwingLow.xTime) and
+         (prevSwingHigh.xTime < prevSwingLow.xTime) and (prevSwingHigh.xTime < lastSwingLow.xTime))
+
+        // Breaker Swing Scenarios
+        if bearishBreakerSwing
+            startIndex = lastSwingHigh.xBar
+            endIndex = prevSwingLow.xBar
+            foundDownCloseCandle = false
+            OHLC cisdCandle = na
+            while not foundDownCloseCandle and startIndex >= endIndex
+                idx = bar_index - (bar_index - startIndex)
+                o = open[idx]
+                h = high[idx]
+                l = low[idx]
+                c = close[idx]
+                log.info("GOT HERE!")
+                if c < o
+                    foundDownCloseCandle := true
+                else
+                    if c > o and close < o
+                        t = lastSwingHigh.xTime - (time - time[idx])
+                        cisdCandle := OHLC.new(xBar = idx, xTime = t, o = o, h = h, l = l, c = c)
+                    startIndex -= 1
+            if not na(cisdCandle)
+                cisd = CISD.new()
+                cisd.xBar := cisdCandle.xBar
+                cisd.xTime := cisdCandle.xTime
+                cisd.y := cisdCandle.o
+                array.push(bearishCISDs, cisd)
+
+
+        // Failure Swing Scenarios
+        // will implement later
+
+        if array.size(bearishCISDs) > 0
+            for cisd in bearishCISDs
+                x2Time = time + (time - time[2])
+                if na(cisd.lineDrawing)
+                    cisd.lineDrawing := line.new(x1= cisd.xTime, y1 = cisd.y, x2 = x2Time, y2 = cisd.y, style = line.style_solid, color = color.new(color.black, 0), xloc = xloc.bar_time, width = 1)
+                else
+                    line.set_x2(cisd.lineDrawing, cisd.invalidated ?  cisd.xInvalidationTime : x2Time)
+
+    if barstate.islast
+        log.info("CISD COUNT: " + str.tostring(array.size(bearishCISDs)))
+
+var _st = "."
+var _it  = "△"
+var _lt = "▲"
+var stH = array.new<SwingPoint>()
+var itH = array.new<SwingPoint>()
+var ltH = array.new<SwingPoint>()
+var stL = array.new<SwingPoint>()
+var itL = array.new<SwingPoint>()
+var ltL = array.new<SwingPoint>()
+
+var float structureHigh = na
+var float structureLow = na
+
+
+
+//identify market structure shifts
+showMarketStructure = input.bool(false, "Show Market Structure")
+if barstate.isconfirmed and showMarketStructure
+    if array.size(swingHighs) >= 2 and array.size(swingLows) >= 2
+        lastSwingHigh = array.get(swingHighs, array.size(swingHighs) - 1)
+        lastSwingLow = array.get(swingLows, array.size(swingLows) - 1)
+        prevSwingHigh = array.get(swingHighs, array.size(swingHighs) - 2)
+        prevSwingLow = array.get(swingLows, array.size(swingLows) - 2)
+
+        //bullish breaker
+        // if lastSwingLow.y < prevSwingLow.y and close > lastSwingHigh.y and lastSwingHigh.y > prevSwingHigh.y and close[1] < lastSwingLow.y
+        //     // if lastSwingLow.mitigated
+        //     lastSwingLow.mss := true
+        //     lastSwingLow.mssXID := bar_index[2]
+        //     lastSwingLow.mssY := close[2]
+        //bullish mss
+        if lastSwingLow.y < prevSwingLow.y and close[1] > lastSwingHigh.y
+            // if lastSwingLow.mitigated
+            lastSwingLow.mss := true
+            lastSwingLow.mssTxt := "Bullish MSS"
+            // lastSwingLow.mssXID := bar_index[2]
+            // lastSwingLow.mssY := close[2]
+
+        if lastSwingHigh.y > prevSwingHigh.y and close[1] < lastSwingLow.y
+            // if lastSwingHigh.mitigated
+            lastSwingHigh.mss := true
+            lastSwingHigh.mssTxt := "Bearish MSS"
+            // lastSwingHigh.mssXID := bar_index[2]
+            // lastSwingHigh.mssY := close[2]
+
+    // Update market structure
+    if not na(structureHigh) and close > structureHigh
+        structureHigh := high
+        // line.new(x1=na, y1=structureHigh, x2=bar_index, y2=structureHigh, style=line.style_solid, color=color.black, xloc=xloc.bar_index, width=2)
+
+    if not na(structureLow) and close < structureLow
+        structureLow := low
+        // line.new(x1=na, y1=structureLow, x2=bar_index, y2=structureLow, style=line.style_solid, color=color.black, xloc=xloc.bar_index, width=2)
+
+    if na(structureHigh) or close > structureHigh
+        structureHigh := high
+
+    if na(structureLow) or close < structureLow
+        structureLow := low
+
+    var swingHighLines = array.new<line>()
+
+    // swingHigh =  high[2] <= high[1] and high < high[1]
+    // swingLow = low[2] >= low[1] and low > low[1]
+
+    // plotshape(series=swingHigh , offset = -1, style=shape.triangledown, location=location.abovebar, color=color.red, size=size.auto)
+    // plotshape(series=swingLow, offset = -1, style=shape.triangleup, location=location.belowbar, color=color.green, size=size.auto)
+
+
+    // if barstate.isnew
+        // log.info("Swing High Count: " + str.tostring(array.size(swingHighs)))
+        // log.info("Swing Low Count: " + str.tostring(array.size(swingLows)))

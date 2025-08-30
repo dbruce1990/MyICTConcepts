@@ -1,0 +1,40 @@
+# Alignment & Confirmation
+
+### **Alignment and Confirmation**
+
+Once a valid candle 2 closure or candle 3 closure has been identified, a lower timeframe confirmation must be present to continue - see flow chart at end of course. This lower timeframe confirmation will be a change in the state of delivery or a CISD. This is the same as the opposing candles lesson.
+
+Below are the timeframe pairings to be used:
+
+**Swing Point → CISD in Candle 2**
+
+Weekly Swing Point → 4 Hour CISD
+
+Daily Swing Point → 1 Hour CISD
+
+4 Hour Swing Point → 15 Minute CISD
+
+1 Hour Swing Point → 5 Minute CISD
+
+30 Minute Swing Point → 3 Minute CISD
+
+15 Minute Swing Point → 1 Minute CISD
+
+Here is an example of a valid candle 2 closure on the higher timeframe. The next step is to verify if there is a lower timeframe CISD.
+
+[](.images/c2f307c9-dcb3-4272-ff32-0a2ab50b9100.png)
+
+Marking out the CISD.
+
+[](.images/bab3a644-f172-4349-03a5-eec00607b600.png)
+
+Projections can then be added to the manipulation leg
+
+[](.images/1c667656-2c49-4395-ba42-74867b45cd00.png)
+
+Following the flow chart. Once there is a valid closure and paired with the confirmation on the aligned timeframe, entries can be taken.
+
+[](.images/5a2a23da-e31f-4174-b749-3146da286900.png)
+
+> This is the end of the Alignment & Confirmation lesson
+>

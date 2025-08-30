@@ -1,0 +1,32 @@
+# Swing Formation
+
+### **Swing Formation**
+
+After aligning with a higher timeframe bias, the next step in the fractal model is to identify a candle 2 closure or a candle 3 closure.
+
+[](.images/c4e1a5df-04b4-4fd4-ddc4-e0f875937900.png)
+
+Now when looking for a candle 2 or candle 3 closure, the most important thing is that it happens at a relevant level. This will be either a Fair Value Gap (FVG), High or Low, and only if neither of the first two are present will an opposing candle be used.
+
+Here is an example of a swing formation at a fair value gap
+
+[](.images/2d9a0cd4-f3ac-46ab-5bec-8cdd72e3f400.png)
+
+[](.images/b76988aa-03e0-4481-ab7b-3341b121fa00.png)
+
+[](.images/8d74599b-7309-4ff9-0ea5-7c5e220b3000.png)
+
+A swing forming at a high or low
+
+[](.images/fb44df0c-bb2d-41b1-85e4-ef4b10e8b200.png)
+
+[](.images/4e9b0325-33b7-4053-0b4b-f29ea1367b00.png)
+
+A swing forming at an opposing candle (CISD). This is only used when there is neither a fair value gap or a high or low to be the point of interest.
+
+[](.images/71bde722-d87e-4cf2-81b2-6d8eb5e45300.png)
+
+[](.images/da6daa51-0e93-47b4-e2b0-77cbdd19dd00.png)
+
+> This is the end of the Swing Formation lesson
+>

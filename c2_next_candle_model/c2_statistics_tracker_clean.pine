@@ -1,0 +1,343 @@
+//@version=5
+indicator("C2 Next Candle Statistics Tracker", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ========================================================================
+// C2 NEXT CANDLE MODEL STATISTICS TRACKER
+// Based on: TTrades Daily Bias + Next Candle Model Logic
+// Purpose: Track C3 success rates specifically after C2 closures
+// ========================================================================
+
+// === SWING POINT TYPE & ARRAYS ===
+type SwingPoint
+    int xBar
+    int xTime
+    float y
+    string state // "active", "swept", "closed_through"
+    int sweepX
+    int closedX
+    line lineDrawing = na
+
+var swingHighs = array.new<SwingPoint>()
+var swingLows = array.new<SwingPoint>()
+
+// === SWING POINT SETTINGS ===
+inputGroupSwings = "Swing Point Settings"
+showActiveSwings = input.bool(true, "Show Active Swings", group=inputGroupSwings, tooltip="Show swing points that have not been swept or closed through.")
+showSweptSwings = input.bool(true, "Show Swept Swings", group=inputGroupSwings, tooltip="Show swing points that have been swept (wicked through) but not closed through.")
+maxSweptSwings = input.int(5, "Max Swept Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of swept swings to display.")
+showClosedSwings = input.bool(false, "Show Closed-Through Swings", group=inputGroupSwings, tooltip="Show swing points that have been closed through (break of structure). Useful for market structure analysis.")
+maxClosedSwings = input.int(3, "Max Closed Swings", minval=1, maxval=20, group=inputGroupSwings, tooltip="Maximum number of closed-through swings to display.")
+activeHighColor = input.color(color.black, "Active High Color", group=inputGroupSwings, tooltip="Color for active swing high lines.")
+activeLowColor = input.color(color.black, "Active Low Color", group=inputGroupSwings, tooltip="Color for active swing low lines.")
+sweptHighColor = input.color(color.black, "Swept High Color", group=inputGroupSwings, tooltip="Color for swept swing high lines.")
+sweptLowColor = input.color(color.black, "Swept Low Color", group=inputGroupSwings, tooltip="Color for swept swing low lines.")
+closedHighColor = input.color(#616161, "Closed High Color", group=inputGroupSwings, tooltip="Color for closed-through swing high lines.")
+closedLowColor = input.color(#616161, "Closed Low Color", group=inputGroupSwings, tooltip="Color for closed-through swing low lines.")
+activeSwingStyle = input.string("solid", "Active Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for active swings.")
+sweptSwingStyle = input.string("dashed", "Swept Swing Style", options=["solid", "dashed"], group=inputGroupSwings, tooltip="Line style for swept swings.")
+closedSwingStyle = input.string("dotted", "Closed-Through Swing Style", options=["solid", "dashed", "dotted"], group=inputGroupSwings, tooltip="Line style for closed-through swings.")
+maxSwingPoints = input.int(100, "Max Swing Points Stored", minval=20, maxval=500, group=inputGroupSwings, tooltip="Maximum number of swing points to keep in memory. Older points will be removed for performance.")
+lookbackBars = input.int(500, "Bars to Display", minval=50, maxval=5000, group=inputGroupSwings, tooltip="Only show swing points from the last N bars.")
+
+// === C2 SETTINGS ===
+table_position = input.string("Bottom Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"])
+filter_swing_points = input.bool(false, "Filter: Only C2s at Swing Points", tooltip="When enabled, only track C2 closures that occur at swing highs/lows (3-candle patterns)")
+swing_length = input.int(1, "Swing Point Length", minval=1, maxval=10, tooltip="Number of candles on each side to confirm swing point (1 = 3-candle pattern)")
+
+// === BULLETPROOF ARRAY CAPPING ===
+while array.size(swingHighs) > maxSwingPoints
+    swing = array.shift(swingHighs)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+while array.size(swingLows) > maxSwingPoints
+    swing = array.shift(swingLows)
+    if not na(swing.lineDrawing)
+        line.delete(swing.lineDrawing)
+
+// === SWING DETECTION (3-bar pivots) ===
+if barstate.isconfirmed
+    // Highs
+    if high[1] > high[0] and high[1] > high[2]
+        swing = SwingPoint.new()
+        swing.y := high[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingHighs, swing)
+    // Lows
+    if low[1] < low[0] and low[1] < low[2]
+        swing = SwingPoint.new()
+        swing.y := low[1]
+        swing.xTime := time[1]
+        swing.xBar := bar_index[1]
+        swing.state := "active"
+        swing.sweepX := na
+        swing.closedX := na
+        array.push(swingLows, swing)
+
+// === SWING RENDERING ===
+renderSwings(array<SwingPoint> swings, bool isHigh) =>
+    if array.size(swings) > 0
+        sweptIdx = array.new_int()
+        closedIdx = array.new_int()
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            // Only process/display if within lookback window
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            // Update state
+            if swing.state == "active"
+                swept = isHigh ? high > swing.y : low < swing.y
+                closed = isHigh ? close > swing.y : close < swing.y
+                if swept
+                    swing.state := "swept"
+                    swing.sweepX := bar_index
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                array.set(swings, i, swing)
+            if swing.state == "swept"
+                closed = isHigh ? close > swing.y : close < swing.y
+                if closed
+                    swing.state := "closed_through"
+                    swing.closedX := bar_index
+                    array.set(swings, i, swing)
+            // Collect indices for visible swept/closed
+            if swing.state == "swept"
+                array.push(sweptIdx, i)
+            if swing.state == "closed_through"
+                array.push(closedIdx, i)
+        // Cap swept/closed shown (for display only)
+        sweptToShow = array.size(sweptIdx) > maxSweptSwings ? array.slice(sweptIdx, array.size(sweptIdx) - maxSweptSwings, array.size(sweptIdx)) : sweptIdx
+        closedToShow = array.size(closedIdx) > maxClosedSwings ? array.slice(closedIdx, array.size(closedIdx) - maxClosedSwings, array.size(closedIdx)) : closedIdx
+        for i = 0 to array.size(swings) - 1
+            swing = array.get(swings, i)
+            if bar_index - swing.xBar > lookbackBars
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                continue
+            showLine = false
+            lineColor = color(na)
+            style = line.style_solid
+            // Color and style by state and high/low
+            if swing.state == "active" and showActiveSwings
+                showLine := true
+                lineColor := isHigh ? activeHighColor : activeLowColor
+                style := activeSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "swept" and showSweptSwings and array.includes(sweptToShow, i)
+                showLine := true
+                lineColor := isHigh ? sweptHighColor : sweptLowColor
+                style := sweptSwingStyle == "dashed" ? line.style_dashed : line.style_solid
+            if swing.state == "closed_through" and showClosedSwings and array.includes(closedToShow, i)
+                showLine := true
+                lineColor := isHigh ? closedHighColor : closedLowColor
+                style := closedSwingStyle == "dashed" ? line.style_dashed : closedSwingStyle == "dotted" ? line.style_dotted : line.style_solid
+            if showLine
+                x2 = swing.state == "active" ? bar_index : swing.state == "swept" ? swing.sweepX : swing.closedX
+                if na(swing.lineDrawing)
+                    swing.lineDrawing := line.new(x1=swing.xBar, y1=swing.y, x2=x2, y2=swing.y, color=lineColor, width=1, extend=extend.none, style=style)
+                else
+                    line.set_x2(swing.lineDrawing, x2)
+                    line.set_style(swing.lineDrawing, style)
+                    line.set_color(swing.lineDrawing, lineColor)
+                array.set(swings, i, swing)
+            else
+                if not na(swing.lineDrawing)
+                    line.delete(swing.lineDrawing)
+                    swing.lineDrawing := na
+                    array.set(swings, i, swing)
+
+if showActiveSwings or showSweptSwings or showClosedSwings
+    renderSwings(swingHighs, true)
+    renderSwings(swingLows, false)
+
+// === C2 STATISTICS TRACKER ===
+// Convert string to position
+get_table_position() =>
+    switch table_position
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+        => position.bottom_right
+
+// Constants for bias values
+var int BIAS_C2_PCL = -1  // C2 formed, bias C2 low (expecting C3 to take C2 low)
+var int BIAS_NONE = 0     // No C2 detected
+var int BIAS_C2_PCH = 1   // C2 formed, bias C2 high (expecting C3 to take C2 high)
+
+// Initialize bias tracking
+var int current_bias = BIAS_NONE
+var bool c2_detected = false
+
+// C2 Statistics Variables
+var int c2_pch_samples = 0     // Total C2s with PCH bias
+var int c2_pcl_samples = 0     // Total C2s with PCL bias
+var int c2_pch_hits = 0        // C2 PCH bias hits (C3 reached C2 high)
+var int c2_pcl_hits = 0        // C2 PCL bias hits (C3 reached C2 low)
+var int c2_pch_closes = 0      // C2 PCH bias close throughs
+var int c2_pcl_closes = 0      // C2 PCL bias close throughs
+
+// Tracking variables for C2 formation
+var float target_high = na
+var float target_low = na
+var bool awaiting_c3 = false
+
+// Helper function to detect swing points
+is_swing_high(length) =>
+    // Check if current candle[1] is higher than 'length' candles on each side
+    if bar_index < length
+        false
+    else
+        is_high = true
+        for i = 1 to length
+            if high[1] <= high[1 + i] or high[1] <= high[1 - i]
+                is_high := false
+                break
+        is_high
+
+is_swing_low(length) =>
+    // Check if current candle[1] is lower than 'length' candles on each side
+    if bar_index < length
+        false
+    else
+        is_low = true
+        for i = 1 to length
+            if low[1] >= low[1 + i] or low[1] >= low[1 - i]
+                is_low := false
+                break
+        is_low
+
+// Helper function to detect C2 closure
+is_c2_closure() =>
+    // C2 Logic: Current candle sweeps previous high/low BUT closes back inside previous range
+    swept_high = high > high[1]
+    swept_low = low < low[1] 
+    closed_inside = close <= high[1] and close >= low[1]
+    
+    // C2 must sweep one extreme and close inside
+    c2_bullish = swept_low and closed_inside and not swept_high
+    c2_bearish = swept_high and closed_inside and not swept_low
+    
+    // If swing point filter is enabled, also check if C1 was a swing point
+    if filter_swing_points
+        c1_is_swing_high = is_swing_high(swing_length)
+        c1_is_swing_low = is_swing_low(swing_length)
+        
+        // Only valid if C2 swept a swing point
+        c2_bullish := c2_bullish and c1_is_swing_low  // C2 swept swing low
+        c2_bearish := c2_bearish and c1_is_swing_high  // C2 swept swing high
+    
+    [c2_bullish, c2_bearish]
+
+if barstate.isconfirmed
+    // Track C3 results if we're awaiting C3 completion
+    if awaiting_c3
+        if current_bias == BIAS_C2_PCH
+            // Expecting C3 to take C2 high (previous candle high in Next Candle Model logic)
+            if high >= target_high
+                c2_pch_hits += 1
+                if close > target_high
+                    c2_pch_closes += 1
+                awaiting_c3 := false
+        else if current_bias == BIAS_C2_PCL
+            // Expecting C3 to take C2 low (previous candle low in Next Candle Model logic)
+            if low <= target_low
+                c2_pcl_hits += 1
+                if close < target_low
+                    c2_pcl_closes += 1
+                awaiting_c3 := false
+    
+    // Reset if we're no longer awaiting C3 (either hit target or moved too far)
+    if awaiting_c3 and bar_index > (bar_index[2] + 5)  // Timeout after 5 bars
+        awaiting_c3 := false
+    
+    // Check for new C2 formation
+    [is_c2_bull, is_c2_bear] = is_c2_closure()
+    
+    if is_c2_bull
+        // Bullish C2: Swept C1 low, closed inside C1 range
+        // Bias: Expect C3 to reach for C2 high (Next Candle Model logic)
+        current_bias := BIAS_C2_PCH
+        target_high := high     // Store C2 high as target (current candle high)
+        target_low := low       // Store C2 low for reference
+        c2_pch_samples += 1     // Increment sample count
+        awaiting_c3 := true
+        c2_detected := true
+        
+        // Optional: Add label for visualization
+        if barstate.isconfirmed
+            swing_label = filter_swing_points ? "C2@SW↑" : "C2↑"
+            label.new(bar_index, low, swing_label, color=color.blue, style=label.style_label_up, size=size.small)
+            
+    else if is_c2_bear
+        // Bearish C2: Swept C1 high, closed inside C1 range  
+        // Bias: Expect C3 to reach for C2 low (Next Candle Model logic)
+        current_bias := BIAS_C2_PCL
+        target_high := high     // Store C2 high for reference
+        target_low := low       // Store C2 low as target (current candle low)
+        c2_pcl_samples += 1     // Increment sample count
+        awaiting_c3 := true
+        c2_detected := true
+        
+        // Optional: Add label for visualization
+        if barstate.isconfirmed
+            swing_label = filter_swing_points ? "C2@SW↓" : "C2↓"
+            label.new(bar_index, high, swing_label, color=color.red, style=label.style_label_down, size=size.small)
+    else
+        c2_detected := false
+
+// Calculate Success Rates
+calc_percentage(successes, attempts) =>
+    attempts > 0 ? str.tostring((successes / attempts) * 100, "#.0") + "%" : "N/A"
+
+string c2_pch_success_rate = calc_percentage(c2_pch_hits, c2_pch_samples)
+string c2_pch_close_rate = calc_percentage(c2_pch_closes, c2_pch_hits)
+
+string c2_pcl_success_rate = calc_percentage(c2_pcl_hits, c2_pcl_samples)
+string c2_pcl_close_rate = calc_percentage(c2_pcl_closes, c2_pcl_hits)
+
+// Display Statistics Table
+var table stats_table = table.new(get_table_position(), 3, 5, bgcolor=color.white, border_width=1)
+
+if barstate.islast
+    // Dynamic table title based on filter setting
+    table_title = filter_swing_points ? "C2@Swing" : "C2 Type"
+    
+    // Header
+    table.cell(stats_table, 0, 0, table_title, text_color=color.black, bgcolor=color.gray)
+    table.cell(stats_table, 1, 0, "Success Rate", text_color=color.black, bgcolor=color.gray)  
+    table.cell(stats_table, 2, 0, "Close Rate", text_color=color.black, bgcolor=color.gray)
+    
+    // C2 Bullish (PCH Bias) Stats
+    table.cell(stats_table, 0, 1, "C2 Bull→PCH", text_color=color.black)
+    table.cell(stats_table, 1, 1, c2_pch_success_rate + " (" + str.tostring(c2_pch_samples) + ")", text_color=color.black)
+    table.cell(stats_table, 2, 1, c2_pch_close_rate, text_color=color.black)
+    
+    // C2 Bearish (PCL Bias) Stats  
+    table.cell(stats_table, 0, 2, "C2 Bear→PCL", text_color=color.black)
+    table.cell(stats_table, 1, 2, c2_pcl_success_rate + " (" + str.tostring(c2_pcl_samples) + ")", text_color=color.black)
+    table.cell(stats_table, 2, 2, c2_pcl_close_rate, text_color=color.black)
+    
+    // Combined Stats
+    total_samples = c2_pch_samples + c2_pcl_samples
+    total_hits = c2_pch_hits + c2_pcl_hits
+    total_closes = c2_pch_closes + c2_pcl_closes
+    combined_success = calc_percentage(total_hits, total_samples)
+    combined_close_rate = calc_percentage(total_closes, total_hits)
+    
+    table.cell(stats_table, 0, 3, "Combined C2", text_color=color.black, bgcolor=color.yellow)
+    table.cell(stats_table, 1, 3, combined_success + " (" + str.tostring(total_samples) + ")", text_color=color.black, bgcolor=color.yellow)
+    table.cell(stats_table, 2, 3, combined_close_rate, text_color=color.black, bgcolor=color.yellow)
+
+// Plot bias for visualization (optional)
+plot(current_bias, "C2 Bias", color=current_bias > 0 ? color.green : current_bias < 0 ? color.red : color.gray, display=display.data_window)

@@ -1,0 +1,1 @@
+This folder contains notes and images that can be analyzed to better understand TTrades' "Fractal Model" (commonly abbreviated and referred to as TTFM). Under /ttfm_course I have included his actual course material  we can use while building this indicator. It can help us with our approach to designing the indicator and showing what's relevant.
