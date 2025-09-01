@@ -12,6 +12,7 @@ indicator("MyTTFM - HTF Candle Foundation", "MyTTFM", overlay=true, max_boxes_co
 // Input Groups for organized settings
 var string GROUP_GENERAL = "General Settings"
 var string GROUP_HTF_CANDLES = "HTF Candles"
+var string GROUP_PERIOD_SEPARATORS = "HTF Period Separators"
 var string GROUP_VISUAL = "Visual Settings"
 var string GROUP_INFO = "Info Table"
 
@@ -34,6 +35,14 @@ htfBullBodyColor = input.color(#089981, "Bull Body", group=GROUP_HTF_CANDLES)
 htfBearBodyColor = input.color(#000000, "Bear Body", group=GROUP_HTF_CANDLES)
 htfBorderColor = input.color(#000000, "Border Color", group=GROUP_HTF_CANDLES)
 htfWickColor = input.color(#000000, "Wick Color", group=GROUP_HTF_CANDLES)
+
+// HTF Period Separators
+showPeriodSeparators = input.bool(true, "Show Period Separators", group=GROUP_PERIOD_SEPARATORS, tooltip="Show vertical lines at HTF period boundaries")
+separatorStyle = input.string("Dotted", "Separator Style", options=["Solid", "Dashed", "Dotted"], group=GROUP_PERIOD_SEPARATORS)
+separatorColor = input.color(color.black, "Separator Color", group=GROUP_PERIOD_SEPARATORS)
+separatorWidth = input.int(1, "Separator Width", minval=1, maxval=3, group=GROUP_PERIOD_SEPARATORS)
+showSeparatorLabels = input.bool(true, "Show Period Labels", group=GROUP_PERIOD_SEPARATORS, tooltip="Show HTF period start labels")
+separatorLabelColor = input.color(color.black, "Period Label Color", group=GROUP_PERIOD_SEPARATORS)
 
 // Labels and Information
 showHTFLabels = input.bool(true, "Show HTF Labels", group=GROUP_VISUAL, tooltip="Show HTF timeframe labels")
@@ -74,9 +83,23 @@ type HTFCandleSet
     label tfLabel
     label timerLabel
 
+// HTF Period Separator Type
+type HTFPeriodSeparator
+    line separatorLine
+    label periodLabel
+    int startBar
+
 // ==================================================================================
 // HELPER FUNCTIONS
 // ==================================================================================
+
+// Convert separator style string to line style
+getSeparatorLineStyle() =>
+    switch separatorStyle
+        "Solid" => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_dashed
 
 // Get automatic HTF timeframe based on chart timeframe
 getAutoHTFTimeframe() =>
@@ -130,6 +153,9 @@ safeArrayGet(arr, index) =>
 // HTF Candle Set
 var HTFCandleSet htfSet = HTFCandleSet.new(candles=array.new<HTFCandle>(), timeframe="", maxDisplay=maxHTFCandles, tfLabel=na, timerLabel=na)
 
+// HTF Period Separators tracking
+var array<HTFPeriodSeparator> periodSeparators = array.new<HTFPeriodSeparator>()
+
 // Current HTF settings
 htfTimeframe = getFractalTimeframe()
 htfSet.timeframe := htfTimeframe
@@ -155,6 +181,28 @@ htfClose = request.security(syminfo.tickerid, htfTimeframe, close, lookahead=bar
 
 // Create new HTF candle when new period starts
 if isNewHTFPeriod and barstate.isconfirmed
+    // Create HTF period separator
+    if showPeriodSeparators
+        // Create separator line from top to bottom of chart
+        separatorLine = line.new(x1=bar_index, y1=high, x2=bar_index, y2=low, color=separatorColor, style=getSeparatorLineStyle(), width=separatorWidth, extend=extend.both)
+        
+        // Create period label if enabled
+        var label periodLabel = na
+        if showSeparatorLabels
+            periodLabel := label.new(x=bar_index, y=low, text=htfTimeframe + " Start", color=color.new(color.white, 100), textcolor=separatorLabelColor, style=label.style_label_up, size=size.small)
+        
+        // Create separator object and add to tracking array
+        newSeparator = HTFPeriodSeparator.new(separatorLine=separatorLine, periodLabel=periodLabel, startBar=bar_index)
+        array.unshift(periodSeparators, newSeparator)
+        
+        // Clean up old separators (match HTF candle count)
+        while array.size(periodSeparators) > maxHTFCandles
+            oldSeparator = array.pop(periodSeparators)
+            if not na(oldSeparator) and not na(oldSeparator.separatorLine)
+                line.delete(oldSeparator.separatorLine)
+            if not na(oldSeparator) and not na(oldSeparator.periodLabel)
+                label.delete(oldSeparator.periodLabel)
+    
     // Create new HTF candle
     newCandle = HTFCandle.new(o=htfOpen, h=htfHigh, l=htfLow, c=htfClose, openTime=time, openIdx=bar_index, closeIdx=bar_index, highIdx=bar_index, lowIdx=bar_index, isComplete=false, candleBody=na, wickUp=na, wickDown=na)
     
@@ -278,7 +326,7 @@ if showHTFLabels and barstate.islast and array.size(htfSet.candles) > 0
 
 if showInfoTable and barstate.islast
     // Create info table
-    infoTable = table.new(position=position.top_right, columns=2, rows=6, bgcolor=color.new(color.white, 90), border_width=1, border_color=color.gray)
+    infoTable = table.new(position=position.top_right, columns=2, rows=7, bgcolor=color.new(color.white, 90), border_width=1, border_color=color.gray)
     
     // Table content
     table.cell(infoTable, 0, 0, "Chart TF:", text_color=color.black, text_size=size.small)
@@ -290,15 +338,18 @@ if showInfoTable and barstate.islast
     table.cell(infoTable, 0, 2, "HTF Candles:", text_color=color.black, text_size=size.small)
     table.cell(infoTable, 1, 2, str.tostring(array.size(htfSet.candles)), text_color=color.blue, text_size=size.small)
     
+    table.cell(infoTable, 0, 3, "Period Separators:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 3, str.tostring(array.size(periodSeparators)), text_color=color.blue, text_size=size.small)
+    
     // HTF OHLC Data
-    table.cell(infoTable, 0, 3, "HTF Open:", text_color=color.black, text_size=size.small)
-    table.cell(infoTable, 1, 3, str.tostring(htfOpen, "#.####"), text_color=color.gray, text_size=size.small)
+    table.cell(infoTable, 0, 4, "HTF Open:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(htfOpen, "#.####"), text_color=color.gray, text_size=size.small)
     
-    table.cell(infoTable, 0, 4, "HTF High:", text_color=color.black, text_size=size.small)
-    table.cell(infoTable, 1, 4, str.tostring(htfHigh, "#.####"), text_color=color.green, text_size=size.small)
+    table.cell(infoTable, 0, 5, "HTF High:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 5, str.tostring(htfHigh, "#.####"), text_color=color.green, text_size=size.small)
     
-    table.cell(infoTable, 0, 5, "HTF Low:", text_color=color.black, text_size=size.small)
-    table.cell(infoTable, 1, 5, str.tostring(htfLow, "#.####"), text_color=color.red, text_size=size.small)
+    table.cell(infoTable, 0, 6, "HTF Low:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 6, str.tostring(htfLow, "#.####"), text_color=color.red, text_size=size.small)
 
 // ==================================================================================
 // PHASE 1 COMPLETION NOTES
