@@ -34,6 +34,7 @@ I am developing an ICT (Inner Circle Trader) concepts indicator in Pine Script v
     - 30m → 3m
     - 15m → 1m
     - 5m → 15sec
+    So if I want to use utilize 3 time frames, I can use the HTF for bias, the ITF for structure, and the LTF for precise entry. For example, if I'm looking to trade daily expansions, I am going to start with the Daily as my HTF bias. Then I would look to the 1hr for structure and the 5m for precise entry. If you look at the TF Pairings, we can see Daily and 1hr are paired. So I go from the daily chart to the 1hr. From the one I repeat the process. I find a 1hr candle where I want to trade on the next candle. From the TF Pairings we can see that the 1hr and 5 min are paired. Or, for another example, maybe i'm trying to catch the weekly range. I can use the weekly as my Bias, I can drop to the 4hr to identify structure since the Weekly and 4hr are paired. From the 4hr, I can refine my entry to ensure the 15m is aligned with the 4hr. Start on the Weekly, look at the 4hr structure. Mark my 4hr and then use it as bias again, and wait for 15m min alignment. If I really wanted to, I could then further refine from the 15 min to the 1 min. But generally I don't use more then 3 timeframes personally, I'm just explaining how it works.
 
 
 ### Technical Architecture

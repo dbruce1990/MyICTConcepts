@@ -5,6 +5,11 @@ indicator("My Swing Points", overlay=true, max_lines_count=500, max_labels_count
 // SWING POINT TRACKER - Standalone Indicator
 // Purpose: Track and visualize swing points with active/swept/closed states
 // Features: 3-bar pivot detection with state management and visual customization
+// 
+// Key Improvements:
+// - Individual swing state controls: Separate limits for Active, Swept, and Closed swings
+// - Timeframe filtering: Hide lower TF swings on higher TF charts
+// - Cleaner UI: Reduced confusing performance options
 // ========================================================================
 
 // === SWING POINT TYPE & ARRAYS ===
@@ -34,9 +39,11 @@ inputGroupDisplay = "Display"
 htfTimeframe = input.timeframe("", "Timeframe", tooltip="Select timeframe for swing detection. Use 'Chart' for current chart timeframe.")
 showActiveSwings = input.bool(true, "Show Active Swings", group=inputGroupDisplay, tooltip="Show swing points that have not been swept or closed through.")
 showSweptSwings = input.bool(true, "Show Swept Swings", group=inputGroupDisplay, tooltip="Show swing points that have been swept (wicked through) but not closed through.")
-maxSweptSwings = input.int(5, "Max Swept Swings", minval=1, maxval=20, group=inputGroupDisplay, tooltip="Maximum number of swept swings to display.")
 showClosedSwings = input.bool(false, "Show Closed-Through Swings", group=inputGroupDisplay, tooltip="Show swing points that have been closed through (break of structure). Useful for market structure analysis.")
-maxClosedSwings = input.int(3, "Max Closed Swings", minval=1, maxval=20, group=inputGroupDisplay, tooltip="Maximum number of closed-through swings to display.")
+maxActiveSwings = input.int(10, "Max Active Swings", minval=1, maxval=50, group=inputGroupDisplay, tooltip="Maximum number of active swings to display (each direction).")
+maxSweptSwings = input.int(5, "Max Swept Swings", minval=1, maxval=50, group=inputGroupDisplay, tooltip="Maximum number of swept swings to display (each direction).")
+maxClosedSwings = input.int(3, "Max Closed Swings", minval=1, maxval=50, group=inputGroupDisplay, tooltip="Maximum number of closed-through swings to display (each direction).")
+hideOnHigherTimeframes = input.bool(true, "Hide on Higher Timeframes", group=inputGroupDisplay, tooltip="Hide swing points when chart timeframe is higher than swing detection timeframe to avoid clutter.")
 showInfoTable = input.bool(false, "Show Info Table", group=inputGroupDisplay, tooltip="Display swing point statistics table.")
 tablePosition = input.string("Top Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=inputGroupDisplay)
 
@@ -46,13 +53,13 @@ activeHighColor = input.color(color.black, "Active High Color", group=inputGroup
 activeLowColor = input.color(color.black, "Active Low Color", group=inputGroupVisual, tooltip="Color for active swing low lines.")
 sweptHighColor = input.color(color.black, "Swept High Color", group=inputGroupVisual, tooltip="Color for swept swing high lines.")
 sweptLowColor = input.color(color.black, "Swept Low Color", group=inputGroupVisual, tooltip="Color for swept swing low lines.")
-closedHighColor = input.color(#787B86, "Closed High Color", group=inputGroupVisual, tooltip="Color for closed-through swing high lines.")
-closedLowColor = input.color(#787B86, "Closed Low Color", group=inputGroupVisual, tooltip="Color for closed-through swing low lines.")
+closedHighColor = input.color(color.black, "Closed High Color", group=inputGroupVisual, tooltip="Color for closed-through swing high lines.")
+closedLowColor = input.color(color.black, "Closed Low Color", group=inputGroupVisual, tooltip="Color for closed-through swing low lines.")
 
 // Line Styles
-activeSwingStyle = input.string("solid", "Active Swing Style", options=["solid", "dashed"], group=inputGroupVisual, tooltip="Line style for active swings.")
-sweptSwingStyle = input.string("dashed", "Swept Swing Style", options=["solid", "dashed"], group=inputGroupVisual, tooltip="Line style for swept swings.")
-closedSwingStyle = input.string("dotted", "Closed-Through Swing Style", options=["solid", "dashed", "dotted"], group=inputGroupVisual, tooltip="Line style for closed-through swings.")
+activeSwingStyle = input.string("solid", "Active Swing Style", options=["solid", "dashed"], group=inputGroupVisual, tooltip="Line style for active swings (untouched level).")
+sweptSwingStyle = input.string("dashed", "Swept Swing Style", options=["solid", "dashed"], group=inputGroupVisual, tooltip="Line style for swept swings (traded through but not closed through the level).")
+closedSwingStyle = input.string("dotted", "Closed-Through Swing Style", options=["solid", "dashed", "dotted"], group=inputGroupVisual, tooltip="Line style for closed-through swings (candle closure above/below the level).")
 
 // Line Thickness
 activeSwingWidth = input.int(1, "Active Swing Width", minval=1, maxval=10, group=inputGroupVisual, tooltip="Line thickness for active swings.")
@@ -68,10 +75,7 @@ labelPosition = input.string("right", "Label Position", options=["left", "right"
 
 // Performance Settings
 inputGroupPerformance = "Performance"
-maxSwingPoints = input.int(100, "Max Swing Points Stored", minval=20, maxval=500, group=inputGroupPerformance, tooltip="Maximum number of swing points to keep in memory. Older points will be removed for performance.")
-maxActiveSwings = input.int(10, "Max Active Swings Each", minval=3, maxval=50, group=inputGroupPerformance, tooltip="Maximum number of active swing highs and lows to display (each).")
-useBarLimit = input.bool(false, "Limit by Bar Age", group=inputGroupPerformance, tooltip="Enable to limit swings by bar age instead of swing count.")
-lookbackBars = input.int(500, "Bars to Display", minval=50, maxval=5000, group=inputGroupPerformance, tooltip="Only show swing points from the last N bars (when Bar Age limit is enabled).")
+maxSwingPointsStored = input.int(200, "Max Swing Points in Memory", minval=50, maxval=1000, group=inputGroupPerformance, tooltip="Maximum number of swing points to keep in memory for performance. Older points will be automatically removed.")
 showDebugInfo = input.bool(false, "Show Debug Info", group=inputGroupPerformance, tooltip="Show debug information in data window.")
 
 // === HTF DATA FETCHING ===
@@ -99,6 +103,38 @@ currentLow = low
 currentClose = close
 
 // === HELPER FUNCTIONS ===
+
+// Convert timeframe to minutes for comparison
+timeframeToMinutes(tf) =>
+    if tf == ""
+        timeframe.in_seconds(timeframe.period) / 60
+    else
+        timeframe.in_seconds(tf) / 60
+
+// Check if we should display swings based on timeframe hierarchy
+shouldDisplaySwings() =>
+    if not hideOnHigherTimeframes
+        true
+    else
+        chartTfMinutes = timeframeToMinutes("")
+        swingTfMinutes = timeframeToMinutes(htfTimeframe)
+        result = chartTfMinutes <= swingTfMinutes
+        
+        // Debug output when debug is enabled
+        if showDebugInfo
+            var table debugTable = table.new(position.top_left, 2, 4, bgcolor=color.yellow, border_width=1)
+            if barstate.islast
+                table.cell(debugTable, 0, 0, "Debug Info", text_color=color.black, bgcolor=color.yellow)
+                table.cell(debugTable, 1, 0, "Values", text_color=color.black, bgcolor=color.yellow)
+                table.cell(debugTable, 0, 1, "Chart TF (min)", text_color=color.black, bgcolor=color.white)
+                table.cell(debugTable, 1, 1, str.tostring(chartTfMinutes), text_color=color.black, bgcolor=color.white)
+                table.cell(debugTable, 0, 2, "Swing TF (min)", text_color=color.black, bgcolor=color.white)
+                table.cell(debugTable, 1, 2, str.tostring(swingTfMinutes), text_color=color.black, bgcolor=color.white)
+                table.cell(debugTable, 0, 3, "Should Display", text_color=color.black, bgcolor=color.white)
+                table.cell(debugTable, 1, 3, result ? "YES" : "NO", text_color=color.black, bgcolor=result ? color.green : color.red)
+        
+        result
+
 getLabelSize() =>
     switch labelTextSize
         "tiny" => size.tiny
@@ -130,13 +166,13 @@ getTimeframeLabel() =>
             => htfTimeframe  // Use as-is for other timeframes
 
 // === BULLETPROOF ARRAY CAPPING ===
-while array.size(swingHighs) > maxSwingPoints
+while array.size(swingHighs) > maxSwingPointsStored
     swing = array.shift(swingHighs)
     if not na(swing.lineDrawing)
         line.delete(swing.lineDrawing)
     if not na(swing.swingLabel)
         label.delete(swing.swingLabel)
-while array.size(swingLows) > maxSwingPoints
+while array.size(swingLows) > maxSwingPointsStored
     swing = array.shift(swingLows)
     if not na(swing.lineDrawing)
         line.delete(swing.lineDrawing)
@@ -144,7 +180,7 @@ while array.size(swingLows) > maxSwingPoints
         label.delete(swing.swingLabel)
 
 // === SWING DETECTION (3-bar pivots) ===
-if htf_bar_closed  // Only detect swings when HTF bar actually closes
+if htf_bar_closed and shouldDisplaySwings()  // Only detect swings when HTF bar actually closes AND timeframe conditions are met
     // Track when new HTF swings form using simple value comparison
     var float prevHTFHigh = na
     var float prevHTFLow = na
@@ -231,15 +267,11 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
         sweptIdx = array.new_int()
         closedIdx = array.new_int()
         activeIdx = array.new_int()
+        
+        // First pass: Update swing states and collect indices
         for i = 0 to array.size(swings) - 1
             swing = array.get(swings, i)
-            // Only process/display if within lookback window (when bar limit is enabled)
-            if useBarLimit and bar_index - swing.xBar > lookbackBars
-                if not na(swing.lineDrawing)
-                    line.delete(swing.lineDrawing)
-                if not na(swing.swingLabel)
-                    label.delete(swing.swingLabel)
-                continue
+            
             // Update state
             if swing.state == "active"
                 swept = isHigh ? currentHigh > swing.y : currentLow < swing.y
@@ -260,6 +292,7 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
                     swing.closedX := bar_index
                     swing.closedTime := time
                     array.set(swings, i, swing)
+            
             // Collect indices for visible swings by state
             if swing.state == "active"
                 array.push(activeIdx, i)
@@ -267,44 +300,40 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
                 array.push(sweptIdx, i)
             else if swing.state == "closed_through"
                 array.push(closedIdx, i)
-        // Cap active swings shown (most recent N active swings)
+        
+        // Cap swings shown to individual state limits (most recent N swings of each type)
         activeToShow = array.size(activeIdx) > maxActiveSwings ? array.slice(activeIdx, array.size(activeIdx) - maxActiveSwings, array.size(activeIdx)) : activeIdx
-        // Cap swept/closed shown (for display only)
         sweptToShow = array.size(sweptIdx) > maxSweptSwings ? array.slice(sweptIdx, array.size(sweptIdx) - maxSweptSwings, array.size(sweptIdx)) : sweptIdx
         closedToShow = array.size(closedIdx) > maxClosedSwings ? array.slice(closedIdx, array.size(closedIdx) - maxClosedSwings, array.size(closedIdx)) : closedIdx
+        
+        // Second pass: Render swings
         for i = 0 to array.size(swings) - 1
             swing = array.get(swings, i)
-            if useBarLimit and bar_index - swing.xBar > lookbackBars
-                if not na(swing.lineDrawing)
-                    line.delete(swing.lineDrawing)
-                if not na(swing.swingLabel)
-                    label.delete(swing.swingLabel)
-                continue
             showLine = false
             lineColor = color(na)
             style = line.style_solid
-            // Color and style by state and high/low
+            
+            // Determine if we should show this swing based on state and display settings
             if swing.state == "active" and showActiveSwings and array.includes(activeToShow, i)
                 showLine := true
                 lineColor := isHigh ? activeHighColor : activeLowColor
                 style := activeSwingStyle == "dashed" ? line.style_dashed : line.style_solid
-            if swing.state == "swept" and showSweptSwings and array.includes(sweptToShow, i)
+            else if swing.state == "swept" and showSweptSwings and array.includes(sweptToShow, i)
                 showLine := true
                 lineColor := isHigh ? sweptHighColor : sweptLowColor
                 style := sweptSwingStyle == "dashed" ? line.style_dashed : line.style_solid
-            if swing.state == "closed_through" and showClosedSwings and array.includes(closedToShow, i)
+            else if swing.state == "closed_through" and showClosedSwings and array.includes(closedToShow, i)
                 showLine := true
                 lineColor := isHigh ? closedHighColor : closedLowColor
                 style := closedSwingStyle == "dashed" ? line.style_dashed : closedSwingStyle == "dotted" ? line.style_dotted : line.style_solid
+            
             if showLine
-                // Calculate safe x2 coordinate to prevent future positioning errors
+                // Calculate safe x2 coordinate
                 x2 = switch swing.state
                     "active" => time
                     "swept" => not na(swing.sweepTime) ? swing.sweepTime : time
                     "closed_through" => not na(swing.closedTime) ? swing.closedTime : time
                     => time
-                
-                // Ensure x2 is not in the future beyond current time
                 x2 := math.min(x2, time)
                 
                 // Determine line width based on state
@@ -314,6 +343,7 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
                     "closed_through" => closedSwingWidth
                     => 1
                 
+                // Create or update line
                 if na(swing.lineDrawing)
                     swing.lineDrawing := line.new(x1=swing.xTime, y1=swing.y, x2=x2, y2=swing.y, color=lineColor, width=lineWidth, extend=extend.none, style=style, xloc=xloc.bar_time)
                 else
@@ -322,9 +352,8 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
                     line.set_color(swing.lineDrawing, lineColor)
                     line.set_width(swing.lineDrawing, lineWidth)
                 
-                // Handle swing labels (clean text above/below)
+                // Handle swing labels
                 if showSwingLabels
-                    // Build label text
                     labelText = ""
                     if showTimeframeInLabel and showPriceInLabel
                         labelText := getTimeframeLabel() + " " + str.tostring(swing.y, "#.####")
@@ -355,6 +384,7 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
                 
                 array.set(swings, i, swing)
             else
+                // Clean up line and label if not showing
                 if not na(swing.lineDrawing)
                     line.delete(swing.lineDrawing)
                     swing.lineDrawing := na
@@ -363,9 +393,33 @@ renderSwings(array<SwingPoint> swings, bool isHigh) =>
                     swing.swingLabel := na
                 array.set(swings, i, swing)
 
-if showActiveSwings or showSweptSwings or showClosedSwings
+// === SWING RENDERING ===
+// Only render swings if timeframe conditions are met
+if shouldDisplaySwings() and (showActiveSwings or showSweptSwings or showClosedSwings)
     renderSwings(swingHighs, true)
     renderSwings(swingLows, false)
+else
+    // Clean up all swing drawings when timeframe conditions aren't met
+    if array.size(swingHighs) > 0
+        for i = 0 to array.size(swingHighs) - 1
+            swing = array.get(swingHighs, i)
+            if not na(swing.lineDrawing)
+                line.delete(swing.lineDrawing)
+                swing.lineDrawing := na
+            if not na(swing.swingLabel)
+                label.delete(swing.swingLabel)
+                swing.swingLabel := na
+            array.set(swingHighs, i, swing)
+    if array.size(swingLows) > 0
+        for i = 0 to array.size(swingLows) - 1
+            swing = array.get(swingLows, i)
+            if not na(swing.lineDrawing)
+                line.delete(swing.lineDrawing)
+                swing.lineDrawing := na
+            if not na(swing.swingLabel)
+                label.delete(swing.swingLabel)
+                swing.swingLabel := na
+            array.set(swingLows, i, swing)
 
 // Update active swept swing references after rendering
 if barstate.isconfirmed
@@ -432,6 +486,11 @@ plot(showDebugInfo ? activeHighs : na, "Active Highs", color=activeHighColor, di
 plot(showDebugInfo ? activeLows : na, "Active Lows", color=activeLowColor, display=display.data_window)
 plot(showDebugInfo ? sweptHighs : na, "Swept Highs", color=sweptHighColor, display=display.data_window)
 plot(showDebugInfo ? sweptLows : na, "Swept Lows", color=sweptLowColor, display=display.data_window)
+
+// Timeframe filtering debug
+plot(showDebugInfo ? (shouldDisplaySwings() ? 1 : 0) : na, "TF Filter Active", color=shouldDisplaySwings() ? color.green : color.red, display=display.data_window)
+plot(showDebugInfo ? timeframeToMinutes("") : na, "Chart TF (min)", color=color.blue, display=display.data_window)
+plot(showDebugInfo ? timeframeToMinutes(htfTimeframe) : na, "Swing TF (min)", color=color.orange, display=display.data_window)
 
 // Active swept swing levels (for external indicators to reference)
 plot(not na(active_swept_high) ? active_swept_high : na, "Active Swept High Level", color=sweptHighColor, linewidth=1, display=display.data_window)
