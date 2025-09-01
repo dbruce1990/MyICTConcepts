@@ -44,12 +44,18 @@ separatorWidth = input.int(1, "Separator Width", minval=1, maxval=3, group=GROUP
 showSeparatorLabels = input.bool(true, "Show Period Labels", group=GROUP_PERIOD_SEPARATORS, tooltip="Show HTF period start labels")
 separatorLabelColor = input.color(color.black, "Period Label Color", group=GROUP_PERIOD_SEPARATORS)
 
+// HTF 50% Levels
+show50Levels = input.bool(true, "Show 50% Levels", group=GROUP_PERIOD_SEPARATORS, tooltip="Show 50% level of previous HTF candle")
+fiftyLevelColor = input.color(#000000, "50% Level Color", group=GROUP_PERIOD_SEPARATORS)
+fiftyLevelStyle = input.string("Dotted", "50% Level Style", options=["Solid", "Dashed", "Dotted"], group=GROUP_PERIOD_SEPARATORS)
+fiftyLevelWidth = input.int(1, "50% Level Width", minval=1, maxval=2, group=GROUP_PERIOD_SEPARATORS)
+
 // Labels and Information
 showHTFLabels = input.bool(true, "Show HTF Labels", group=GROUP_VISUAL, tooltip="Show HTF timeframe labels")
 htfLabelColor = input.color(color.black, "Label Color", group=GROUP_VISUAL)
 htfLabelSize = input.string(size.normal, "Label Size", options=[size.tiny, size.small, size.normal, size.large, size.huge], group=GROUP_VISUAL)
 showTimeRemaining = input.bool(true, "Show Time Remaining", group=GROUP_VISUAL, tooltip="Show time remaining in HTF period")
-htfTimerColor = input.color(color.gray, "Timer Color", group=GROUP_VISUAL)
+htfTimerColor = input.color(color.black, "Timer Color", group=GROUP_VISUAL)
 htfTimerSize = input.string(size.small, "Timer Size", options=[size.tiny, size.small, size.normal, size.large], group=GROUP_VISUAL)
 
 // Info Table
@@ -83,11 +89,24 @@ type HTFCandleSet
     label tfLabel
     label timerLabel
 
-// HTF Period Separator Type
+// HTF Period Separator Type (for session boundaries)
 type HTFPeriodSeparator
     line separatorLine
     label periodLabel
     int startBar
+    bool isFuture  // Whether this is a future period boundary
+
+// HTF Session Boundary Tracker
+type HTFSessionBoundary
+    int barIndex
+    int htfTime
+    bool isProcessed
+
+// HTF 50% Level Type (for previous candle's 50% level)
+type HTF50Level
+    line fiftyPercentLine
+    float level
+    int sourceCandle  // Index of the HTF candle this level is based on
 
 // ==================================================================================
 // HELPER FUNCTIONS
@@ -100,6 +119,18 @@ getSeparatorLineStyle() =>
         "Dashed" => line.style_dashed
         "Dotted" => line.style_dotted
         => line.style_dashed
+
+// Convert 50% level style string to line style
+get50LevelLineStyle() =>
+    switch fiftyLevelStyle
+        "Solid" => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_dotted
+
+// Calculate 50% level of an HTF candle (simple high/low midpoint)
+calculate50Level(htfCandle) =>
+    (htfCandle.h + htfCandle.l) / 2
 
 // Get automatic HTF timeframe based on chart timeframe
 getAutoHTFTimeframe() =>
@@ -156,6 +187,12 @@ var HTFCandleSet htfSet = HTFCandleSet.new(candles=array.new<HTFCandle>(), timef
 // HTF Period Separators tracking
 var array<HTFPeriodSeparator> periodSeparators = array.new<HTFPeriodSeparator>()
 
+// HTF Session Boundaries tracking
+var array<HTFSessionBoundary> sessionBoundaries = array.new<HTFSessionBoundary>()
+
+// HTF 50% Levels tracking
+var array<HTF50Level> fiftyLevels = array.new<HTF50Level>()
+
 // Current HTF settings
 htfTimeframe = getFractalTimeframe()
 htfSet.timeframe := htfTimeframe
@@ -165,9 +202,19 @@ htfSet.maxDisplay := maxHTFCandles
 // HTF CANDLE DETECTION AND TRACKING
 // ==================================================================================
 
-// HTF period detection using request.security
-htfTime = request.security(syminfo.tickerid, htfTimeframe, time, lookahead=barmerge.lookahead_off)
-isNewHTFPeriod = ta.change(htfTime) != 0
+// HTF period detection using time() function (Fadi's exact approach)
+htfTime = time(htfTimeframe)
+isNewHTFPeriod = ta.change(htfTime) > 0
+
+// Track session boundaries when they occur
+if isNewHTFPeriod and barstate.isconfirmed
+    // Record this session boundary (start of new HTF period)
+    boundary = HTFSessionBoundary.new(barIndex=bar_index, htfTime=htfTime, isProcessed=false)
+    array.unshift(sessionBoundaries, boundary)
+    
+    // Keep only the boundaries we need for our HTF candles
+    while array.size(sessionBoundaries) > maxHTFCandles
+        array.pop(sessionBoundaries)
 
 // HTF OHLC data
 htfOpen = request.security(syminfo.tickerid, htfTimeframe, open, lookahead=barmerge.lookahead_off)
@@ -179,37 +226,22 @@ htfClose = request.security(syminfo.tickerid, htfTimeframe, close, lookahead=bar
 // HTF CANDLE MANAGEMENT
 // ==================================================================================
 
-// Create new HTF candle when new period starts
+// Create new HTF candle when new period starts using CURRENT BAR data (Fadi's approach)
 if isNewHTFPeriod and barstate.isconfirmed
-    // Create HTF period separator
-    if showPeriodSeparators
-        // Create separator line from top to bottom of chart
-        separatorLine = line.new(x1=bar_index, y1=high, x2=bar_index, y2=low, color=separatorColor, style=getSeparatorLineStyle(), width=separatorWidth, extend=extend.both)
-        
-        // Create period label if enabled
-        var label periodLabel = na
-        if showSeparatorLabels
-            periodLabel := label.new(x=bar_index, y=low, text=htfTimeframe + " Start", color=color.new(color.white, 100), textcolor=separatorLabelColor, style=label.style_label_up, size=size.small)
-        
-        // Create separator object and add to tracking array
-        newSeparator = HTFPeriodSeparator.new(separatorLine=separatorLine, periodLabel=periodLabel, startBar=bar_index)
-        array.unshift(periodSeparators, newSeparator)
-        
-        // Clean up old separators (match HTF candle count)
-        while array.size(periodSeparators) > maxHTFCandles
-            oldSeparator = array.pop(periodSeparators)
-            if not na(oldSeparator) and not na(oldSeparator.separatorLine)
-                line.delete(oldSeparator.separatorLine)
-            if not na(oldSeparator) and not na(oldSeparator.periodLabel)
-                label.delete(oldSeparator.periodLabel)
+    // Mark the previous candle as complete if it exists
+    if array.size(htfSet.candles) > 0
+        lastCandle = safeArrayGet(htfSet.candles, 0)  // Current candle is at index 0
+        if not na(lastCandle)
+            lastCandle.isComplete := true
+            array.set(htfSet.candles, 0, lastCandle)
     
-    // Create new HTF candle
-    newCandle = HTFCandle.new(o=htfOpen, h=htfHigh, l=htfLow, c=htfClose, openTime=time, openIdx=bar_index, closeIdx=bar_index, highIdx=bar_index, lowIdx=bar_index, isComplete=false, candleBody=na, wickUp=na, wickDown=na)
+    // Create new HTF candle with CURRENT BAR data (this starts the new HTF period)
+    newCandle = HTFCandle.new(o=open, h=high, l=low, c=close, openTime=time, openIdx=bar_index, closeIdx=bar_index, highIdx=bar_index, lowIdx=bar_index, isComplete=false, candleBody=na, wickUp=na, wickDown=na)
     
-    // Add to front of array
+    // Add to FRONT of array like Fadi (newest first: right to left in array)
     array.unshift(htfSet.candles, newCandle)
     
-    // Clean up old candles
+    // Clean up old candles (remove from end)
     while array.size(htfSet.candles) > htfSet.maxDisplay
         oldCandle = array.pop(htfSet.candles)
         if not na(oldCandle) and not na(oldCandle.candleBody)
@@ -219,39 +251,121 @@ if isNewHTFPeriod and barstate.isconfirmed
         if not na(oldCandle) and not na(oldCandle.wickDown)
             line.delete(oldCandle.wickDown)
 
-// Update current HTF candle with latest data
+// Update current HTF candle with CURRENT BAR data (progressive updates like Fadi)
 if array.size(htfSet.candles) > 0 and barstate.isconfirmed
     currentCandle = safeArrayGet(htfSet.candles, 0)
     if not na(currentCandle)
-        // Update OHLC data
-        currentCandle.h := math.max(currentCandle.h, htfHigh)
-        currentCandle.l := math.min(currentCandle.l, htfLow)
-        currentCandle.c := htfClose
-        currentCandle.closeIdx := bar_index
-        
-        // Update high/low indices if new extreme
-        if htfHigh > currentCandle.h
+        // Update high if current bar's high is higher
+        if high > currentCandle.h
+            currentCandle.h := high
             currentCandle.highIdx := bar_index
-        if htfLow < currentCandle.l
+        
+        // Update low if current bar's low is lower
+        if low < currentCandle.l
+            currentCandle.l := low
             currentCandle.lowIdx := bar_index
         
-        // Update the candle in array
+        // Always update close and close index (like Fadi)
+        currentCandle.c := close
+        currentCandle.closeIdx := bar_index
+        
+        // Update the candle in array (first position)
         array.set(htfSet.candles, 0, currentCandle)
 
 // ==================================================================================
-// HTF CANDLE RENDERING
+// HTF 50% LEVEL MANAGEMENT (Fixed for Left-to-Right Rendering)
+// ==================================================================================
+
+// Render 50% level for the previous HTF candle (only when HTF candles are visible)
+if show50Levels and array.size(htfSet.candles) >= 2 and showHTFCandles and barstate.islast
+    // Get the previous candle (second in array: index 1)
+    previousCandleIndex = 1
+    previousCandle = safeArrayGet(htfSet.candles, previousCandleIndex)
+    
+    if not na(previousCandle)
+        // Calculate 50% level
+        fiftyLevel = calculate50Level(previousCandle)
+        
+        // Calculate position using Fadi's exact formula: (size - i - 1)
+        candleCount = array.size(htfSet.candles)
+        previousCandlePositionIndex = candleCount - previousCandleIndex - 1
+        previousCandleOffset = htfCandleOffset + previousCandlePositionIndex * (htfCandleWidth + htfCandleSpacing)
+        startX = bar_index + previousCandleOffset
+        
+        // Calculate the end position (1 candle width past the current HTF candle)
+        currentCandleIndex = 0  // Current candle is at index 0
+        currentCandlePositionIndex = candleCount - currentCandleIndex - 1
+        currentCandleOffset = htfCandleOffset + currentCandlePositionIndex * (htfCandleWidth + htfCandleSpacing)
+        endX = bar_index + currentCandleOffset + htfCandleWidth + htfCandleSpacing
+        
+        // Clean up old 50% level line if it exists
+        while array.size(fiftyLevels) > 0
+            old50Level = array.pop(fiftyLevels)
+            if not na(old50Level) and not na(old50Level.fiftyPercentLine)
+                line.delete(old50Level.fiftyPercentLine)
+        
+        // Create 50% level line from previous candle position to 1 candle past current position
+        fiftyLine = line.new(x1=startX, y1=fiftyLevel, x2=endX, y2=fiftyLevel, color=fiftyLevelColor, style=get50LevelLineStyle(), width=fiftyLevelWidth)
+        
+        // Create 50% level object and add to tracking array
+        new50Level = HTF50Level.new(fiftyPercentLine=fiftyLine, level=fiftyLevel, sourceCandle=previousCandleIndex)
+        array.push(fiftyLevels, new50Level)
+
+// ==================================================================================
+// HTF PERIOD SEPARATORS MANAGEMENT (Session Boundaries + 1 Future)
+// ==================================================================================
+
+// Render period separators using tracked session boundaries
+if showPeriodSeparators and array.size(sessionBoundaries) > 0 and barstate.islast
+    // Clean up all existing separators first
+    while array.size(periodSeparators) > 0
+        oldSeparator = array.pop(periodSeparators)
+        if not na(oldSeparator) and not na(oldSeparator.separatorLine)
+            line.delete(oldSeparator.separatorLine)
+        if not na(oldSeparator) and not na(oldSeparator.periodLabel)
+            label.delete(oldSeparator.periodLabel)
+    
+    boundaryCount = array.size(sessionBoundaries)
+    
+    // Create separators for each session boundary (from oldest to newest)
+    for i = boundaryCount - 1 to 0
+        boundary = array.get(sessionBoundaries, i)
+        if not na(boundary)
+            // Use the actual bar index where this session boundary occurred
+            separatorX = boundary.barIndex
+            
+            // Create separator line at the actual chart bar where HTF session started
+            separatorLine = line.new(x1=separatorX, y1=high * 1.1, x2=separatorX, y2=low * 0.9, color=separatorColor, style=getSeparatorLineStyle(), width=separatorWidth, extend=extend.both)
+            
+            // Create period label if enabled
+            var label periodLabel = na
+            if showSeparatorLabels
+                positionIndex = boundaryCount - i - 1  // For numbering left to right (oldest = 1, newest = highest)
+                labelText = htfTimeframe + " #" + str.tostring(positionIndex + 1)
+                periodLabel := label.new(x=separatorX, y=low * 0.95, text=labelText, color=color.new(color.white, 100), textcolor=separatorLabelColor, style=label.style_label_up, size=size.small)
+            
+            // Create separator object and add to tracking array
+            separator = HTFPeriodSeparator.new(separatorLine=separatorLine, periodLabel=periodLabel, startBar=separatorX, isFuture=false)
+            array.push(periodSeparators, separator)
+
+// ==================================================================================
+// HTF CANDLE RENDERING (Fixed: Left to Right Order - Oldest to Newest)
 // ==================================================================================
 
 if showHTFCandles and array.size(htfSet.candles) > 0
     // Calculate positioning
     baseOffset = htfCandleOffset
+    candleCount = array.size(htfSet.candles)
     
-    // Render each HTF candle
-    for i = 0 to array.size(htfSet.candles) - 1
+    // Render each HTF candle (Fadi's exact approach: iterate backwards for left-to-right display)
+    for i = candleCount - 1 to 0
         htfCandle = safeArrayGet(htfSet.candles, i)
         if not na(htfCandle)
-            // Calculate position for this candle
-            candleOffset = baseOffset + i * (htfCandleWidth + htfCandleSpacing)
+            // Calculate position using Fadi's exact formula: (size - i - 1)
+            // This ensures: oldest candle (i=size-1) gets position 0 (leftmost)
+            //              newest candle (i=0) gets position size-1 (rightmost)
+            positionIndex = candleCount - i - 1
+            candleOffset = baseOffset + positionIndex * (htfCandleWidth + htfCandleSpacing)
             
             // Delete existing drawing objects
             if not na(htfCandle.candleBody)
@@ -299,7 +413,7 @@ if showHTFLabels and barstate.islast and array.size(htfSet.candles) > 0
     if not na(htfSet.timerLabel)
         label.delete(htfSet.timerLabel)
     
-    // Calculate center position of all HTF candles (Fadi's approach)
+    // Calculate center position using Fadi's exact approach
     candleCount = array.size(htfSet.candles)
     totalWidth = candleCount * htfCandleWidth + (candleCount - 1) * htfCandleSpacing
     centerX = bar_index + htfCandleOffset + totalWidth / 2
@@ -326,7 +440,7 @@ if showHTFLabels and barstate.islast and array.size(htfSet.candles) > 0
 
 if showInfoTable and barstate.islast
     // Create info table
-    infoTable = table.new(position=position.top_right, columns=2, rows=7, bgcolor=color.new(color.white, 90), border_width=1, border_color=color.gray)
+    infoTable = table.new(position=position.top_right, columns=2, rows=8, bgcolor=color.new(color.white, 90), border_width=1, border_color=color.gray)
     
     // Table content
     table.cell(infoTable, 0, 0, "Chart TF:", text_color=color.black, text_size=size.small)
@@ -341,15 +455,18 @@ if showInfoTable and barstate.islast
     table.cell(infoTable, 0, 3, "Period Separators:", text_color=color.black, text_size=size.small)
     table.cell(infoTable, 1, 3, str.tostring(array.size(periodSeparators)), text_color=color.blue, text_size=size.small)
     
+    table.cell(infoTable, 0, 4, "50% Levels:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(array.size(fiftyLevels)), text_color=color.blue, text_size=size.small)
+    
     // HTF OHLC Data
-    table.cell(infoTable, 0, 4, "HTF Open:", text_color=color.black, text_size=size.small)
-    table.cell(infoTable, 1, 4, str.tostring(htfOpen, "#.####"), text_color=color.gray, text_size=size.small)
+    table.cell(infoTable, 0, 5, "HTF Open:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 5, str.tostring(htfOpen, "#.####"), text_color=color.gray, text_size=size.small)
     
-    table.cell(infoTable, 0, 5, "HTF High:", text_color=color.black, text_size=size.small)
-    table.cell(infoTable, 1, 5, str.tostring(htfHigh, "#.####"), text_color=color.green, text_size=size.small)
+    table.cell(infoTable, 0, 6, "HTF High:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 6, str.tostring(htfHigh, "#.####"), text_color=color.green, text_size=size.small)
     
-    table.cell(infoTable, 0, 6, "HTF Low:", text_color=color.black, text_size=size.small)
-    table.cell(infoTable, 1, 6, str.tostring(htfLow, "#.####"), text_color=color.red, text_size=size.small)
+    table.cell(infoTable, 0, 7, "HTF Low:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 7, str.tostring(htfLow, "#.####"), text_color=color.red, text_size=size.small)
 
 // ==================================================================================
 // PHASE 1 COMPLETION NOTES
