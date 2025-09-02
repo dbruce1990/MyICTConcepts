@@ -48,11 +48,13 @@ I am developing an ICT (Inner Circle Trader) concepts indicator in Pine Script v
 ### Critical Rules (ALWAYS FOLLOW)
 1. **Indentation**: ALWAYS use 4 spaces (never tabs) - this prevents 90% of syntax errors
 2. **Multi-line Function Calls**: NEVER mix positional and named parameters in multi-line calls - use single line with all named parameters instead. There is a bug when copying the script into the Pine Editor that causes the multi-line calls to break. Easier to just keep parameters on a single line.
-3. **Drawing Limits**: Set max_boxes_count, max_lines_count, max_labels_count in indicator declaration
-4. **Array Bounds**: Check array.size() before array.get() calls
-5. **Barstate Handling**: Wrap logic that relies on candle closures in `barstate.isconfirmed` checks
-6. **Object Cleanup**: Implement cleanup methods for drawing objects to prevent exceeding limits and improving performance.
-7. **Error Handling**: Always check for common errors like "Cannot call 'array.get' with argument 'id'=na" and handle them gracefully
+3. **Variable Type Declarations**: ALWAYS declare type for variables assigned `na` values. Use `var float myVar = na` NOT `myVar = na`. This is a recurring compilation error pattern that must be avoided.
+3. **Variable Type Declarations**: ALWAYS declare type for variables assigned `na` values. Use `var float myVar = na` NOT `myVar = na`. This is a recurring compilation error pattern that must be avoided.
+4. **Drawing Limits**: Set max_boxes_count, max_lines_count, max_labels_count in indicator declaration
+5. **Array Bounds**: Check array.size() before array.get() calls
+6. **Barstate Handling**: Wrap logic that relies on candle closures in `barstate.isconfirmed` checks
+7. **Object Cleanup**: Implement cleanup methods for drawing objects to prevent exceeding limits and improving performance.
+8. **Error Handling**: Always check for common errors like "Cannot call 'array.get' with argument 'id'=na" and handle them gracefully
 
 ### Common Error Prevention
 - "Cannot call 'array.get' with argument 'id'=na" → Always initialize arrays and check bounds

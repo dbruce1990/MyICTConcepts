@@ -1,17 +1,5 @@
 //@version=6
-indicator("MyTTFM - HTF Candle Foundat// C2/C3 Detection and Next Candle Model
-var string GROUP_C2C3 = "C2/C3 Detection"
-showC2C3Detection = input.bool(true, "Show C2/C3 Detection", group=GROUP_C2C3, tooltip="Detect and label C2/C3 patterns")
-c2LabelColor = input.color(color.red, "C2 Label Color", group=GROUP_C2C3)
-c3LabelColor = input.color(color.orange, "C3 Label Color", group=GROUP_C2C3)
-c2c3LabelSize = input.string(size.normal, "C2/C3 Label Size", options=[size.tiny, size.small, size.normal, size.large], group=GROUP_C2C3)
-showSweptLevels = input.bool(true, "Show Swept Levels", group=GROUP_C2C3, tooltip="Show lines marking swept highs/lows")
-sweptLevelColor = input.color(color.black, "Swept Level Color", group=GROUP_C// - Memory management with automatic pattern cleanup
-// - Pine Script v6 compliance (named parameters, proper indentation)
-// - Drawing object limits management
-//
-// 📊 C2/C3 DETECTION LOGIC:
-// - C2: Current HTF candle sweeps previous HTF candle high/low but closes back inside rangeTFM", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("MyTTFM - HTF Candle Foundation", "MyTTFM", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // ==================================================================================
 // MyTTFM - Higher Timeframe Trading Foundation
@@ -69,7 +57,7 @@ c2LabelColor = input.color(color.black, "C2 Label Color", group=GROUP_C2C3)
 c3LabelColor = input.color(color.black, "C3 Label Color", group=GROUP_C2C3)
 c2c3LabelSize = input.string(size.normal, "C2/C3 Label Size", options=[size.tiny, size.small, size.normal, size.large], group=GROUP_C2C3)
 showSweptLevels = input.bool(true, "Show Swept Levels", group=GROUP_C2C3, tooltip="Show lines marking swept highs/lows")
-sweptLevelColor = input.color(#000000, "Swept Level Color", group=GROUP_C2C3)
+sweptLevelColor = input.color(color.black, "Swept Level Color", group=GROUP_C2C3)
 sweptLevelWidth = input.int(1, "Swept Level Width", minval=1, maxval=2, group=GROUP_C2C3)
 
 // Labels and Information
@@ -431,7 +419,7 @@ if isNewHTFPeriod and barstate.isconfirmed and array.size(htfSet.candles) >= 2 a
         [isC3, isBullishC3, c3SweptLevel] = detectC3Pattern(currentCandle, previousCandle, twoBarsAgo)
         
         // Variable for swept level lines
-        sweptLine = na
+        var line sweptLine = na
         
         // Process C2 detection
         if isC2
@@ -758,7 +746,7 @@ if showInfoTable and barstate.islast
 // - Pine Script v6 compliance (named parameters, proper indentation)
 // - Drawing object limits management
 //
-// � C2/C3 DETECTION LOGIC:
+// 📊 C2/C3 DETECTION LOGIC:
 // - C2: Current HTF candle sweeps previous HTF candle high/low but closes back inside range
 // - C3: Swing point formation where current candle closes in direction of swing
 // - Next Candle Model: Statistical bias based on close vs previous high/low
@@ -776,7 +764,7 @@ if showInfoTable and barstate.islast
 // 📝 USAGE:
 // This indicator now provides both HTF candle foundation AND C2/C3 pattern detection
 // with Next Candle Model bias calculation. Labels appear between period separators
-// showing C2 (red) and C3 (orange) patterns, with black lines marking swept levels.
+// showing C2 (black) and C3 (black) patterns, with black lines marking swept levels.
 // The info table displays current bias (PCH/PCL) and reasoning.
 //
 // The C2/C3 detection follows TTrades methodology:

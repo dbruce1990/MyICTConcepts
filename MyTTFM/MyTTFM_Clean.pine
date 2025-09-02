@@ -1,0 +1,460 @@
+//@version=6
+indicator("MyTTFM - Clean", "MyTTFM", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ==============================================
+// INPUTS
+// ==============================================
+
+// General
+fractalTimeframe = input.string("Automatic", "HTF Timeframe", options=["Automatic", "5m", "15m", "1H", "4H", "1D", "1W"])
+maxHTFCandles = input.int(5, "Max HTF Candles", minval=1, maxval=20)
+
+// HTF Candles
+showHTFCandles = input.bool(true, "Show HTF Candles")
+htfCandleOffset = input.int(10, "Candle Offset", minval=5, maxval=50)
+htfCandleWidth = input.int(4, "Candle Width", minval=1, maxval=8)
+htfCandleSpacing = input.int(2, "Candle Spacing", minval=1, maxval=5)
+htfBullBodyColor = input.color(#089981, "Bull Body")
+htfBearBodyColor = input.color(#000000, "Bear Body")
+htfBorderColor = input.color(#000000, "Border Color")
+htfWickColor = input.color(#000000, "Wick Color")
+
+// Period Separators
+showPeriodSeparators = input.bool(true, "Show Period Separators")
+separatorColor = input.color(color.black, "Separator Color")
+showSeparatorLabels = input.bool(false, "Show Period Labels")
+
+// 50% Levels
+show50Levels = input.bool(true, "Show 50% Levels")
+fiftyLevelColor = input.color(#000000, "50% Level Color")
+
+// C2/C3 Detection
+showC2C3Detection = input.bool(true, "Show C2/C3 Detection")
+maxC2C3Patterns = input.int(3, "Max C2/C3 Patterns", minval=1, maxval=10, tooltip="Maximum number of recent C2/C3 patterns to display")
+c2LabelColor = input.color(color.black, "C2 Label Color")
+c3LabelColor = input.color(color.black, "C3 Label Color")
+showSweptLevels = input.bool(true, "Show Swept Levels")
+sweptLevelColor = input.color(color.black, "Swept Level Color")
+
+// Info
+showInfoTable = input.bool(true, "Show Info Table")
+
+// ==============================================
+// TYPES
+// ==============================================
+
+type HTFCandle
+    float o
+    float h
+    float l
+    float c
+    int openTime
+    int openIdx
+    int closeIdx
+    int highIdx      // Bar index where the high was created
+    int lowIdx       // Bar index where the low was created
+    bool isComplete
+    box candleBody
+    line wickUp
+    line wickDown
+
+type SessionBoundary
+    int barIndex
+    int htfTime
+
+type C2C3Pattern
+    string patternType
+    float sweptLevel
+    bool isBullish
+    int c1PeriodStart
+    int c2PeriodEnd
+    label patternLabel
+    line sweptLevelLine
+
+type NextCandleBias
+    int bias
+    float targetLevel
+    string biasReason
+    bool isActive
+
+// ==============================================
+// GLOBALS
+// ==============================================
+
+var array<HTFCandle> htfCandles = array.new<HTFCandle>()
+var array<SessionBoundary> sessionBoundaries = array.new<SessionBoundary>()
+var array<C2C3Pattern> c2c3Patterns = array.new<C2C3Pattern>()
+var NextCandleBias currentBias = NextCandleBias.new(bias=0, targetLevel=na, biasReason="", isActive=false)
+var line fiftyLine = na
+var label htfLabel = na
+
+// ==============================================
+// HELPER FUNCTIONS
+// ==============================================
+
+getHTFTimeframe() =>
+    if fractalTimeframe == "Automatic"
+        chartTF = timeframe.period
+        switch
+            chartTF == "1" => "5"
+            chartTF == "3" => "15"
+            chartTF == "5" => "60"
+            chartTF == "15" => "240"
+            chartTF == "60" => "1D"
+            chartTF == "240" => "1W"
+            chartTF == "1D" => "1M"
+            => "240"
+    else
+        switch fractalTimeframe
+            "5m" => "5"
+            "15m" => "15"
+            "1H" => "60"
+            "4H" => "240"
+            "1D" => "1D"
+            "1W" => "1W"
+            => "240"
+
+safeGet(arr, index) =>
+    if array.size(arr) > index and index >= 0
+        array.get(arr, index)
+    else
+        na
+
+cleanupOldCandles() =>
+    while array.size(htfCandles) > maxHTFCandles
+        oldCandle = array.pop(htfCandles)
+        if not na(oldCandle)
+            if not na(oldCandle.candleBody)
+                box.delete(oldCandle.candleBody)
+            if not na(oldCandle.wickUp)
+                line.delete(oldCandle.wickUp)
+            if not na(oldCandle.wickDown)
+                line.delete(oldCandle.wickDown)
+
+// C2 Detection: Sweep + Close Back
+detectC2(current, previous) =>
+    isC2 = false
+    isBullish = false
+    var float sweptLevel = na
+    
+    if not na(current) and not na(previous)
+        // Bullish C2: sweep previous low + close back above that low
+        if current.l < previous.l and current.c > previous.l
+            isC2 := true
+            isBullish := true
+            sweptLevel := previous.l
+        // Bearish C2: sweep previous high + close back below that high  
+        else if current.h > previous.h and current.c < previous.h
+            isC2 := true
+            isBullish := false
+            sweptLevel := previous.h
+    
+    [isC2, isBullish, sweptLevel]
+
+// C3 Detection: Swing Point Formation + Directional Close
+detectC3(current, previous, twoBarsAgo) =>
+    isC3 = false
+    isBullish = false
+    var float sweptLevel = na
+    
+    if not na(current) and not na(previous) and not na(twoBarsAgo)
+        // Bullish C3: previous candle forms swing low, current candle closes bullishly
+        // Swing Low: previous.l < twoBarsAgo.l AND previous.l < current.l
+        // Plus: current candle closes above previous candle's high (continuation)
+        if previous.l < twoBarsAgo.l and previous.l < current.l and current.c > previous.h
+            isC3 := true
+            isBullish := true
+            sweptLevel := previous.l
+        // Bearish C3: previous candle forms swing high, current candle closes bearishly  
+        // Swing High: previous.h > twoBarsAgo.h AND previous.h > current.h
+        // Plus: current candle closes below previous candle's low (continuation)
+        else if previous.h > twoBarsAgo.h and previous.h > current.h and current.c < previous.l
+            isC3 := true
+            isBullish := false
+            sweptLevel := previous.h
+    
+    [isC3, isBullish, sweptLevel]
+
+// Next Candle Model Bias
+calculateBias(current, previous) =>
+    bias = 0
+    var float targetLevel = na
+    biasReason = ""
+    
+    if not na(current) and not na(previous)
+        if current.c > previous.h
+            bias := 1
+            targetLevel := previous.h
+            biasReason := "Close Above PCH"
+        else if current.c < previous.l
+            bias := -1
+            targetLevel := previous.l
+            biasReason := "Close Below PCL"
+        else if current.h > previous.h and current.c <= previous.h
+            bias := -1
+            targetLevel := previous.l
+            biasReason := "Failed PCH"
+        else if current.l < previous.l and current.c >= previous.l
+            bias := 1
+            targetLevel := previous.h
+            biasReason := "Failed PCL"
+        else
+            bias := 0
+            biasReason := current.h <= previous.h and current.l >= previous.l ? "Inside Bar" : "Outside Bar"
+    
+    [bias, targetLevel, biasReason]
+
+// ==============================================
+// MAIN LOGIC
+// ==============================================
+
+htfTimeframe = getHTFTimeframe()
+htfTime = time(htfTimeframe, 'America/New_York')
+isNewHTFPeriod = ta.change(htfTime) > 0
+
+// Track session boundaries
+if isNewHTFPeriod and barstate.isconfirmed
+    boundary = SessionBoundary.new(barIndex=bar_index, htfTime=htfTime)
+    array.unshift(sessionBoundaries, boundary)
+    while array.size(sessionBoundaries) > maxHTFCandles
+        array.pop(sessionBoundaries)
+
+// HTF Candle Management
+if isNewHTFPeriod and barstate.isconfirmed
+    // Mark previous candle as complete
+    if array.size(htfCandles) > 0
+        lastCandle = safeGet(htfCandles, 0)
+        if not na(lastCandle)
+            lastCandle.isComplete := true
+            array.set(htfCandles, 0, lastCandle)
+    
+    // Create new candle - ONLY set Open and initial values
+    newCandle = HTFCandle.new(o=open, h=high, l=low, c=close, openTime=time, openIdx=bar_index, closeIdx=bar_index, highIdx=bar_index, lowIdx=bar_index, isComplete=false, candleBody=na, wickUp=na, wickDown=na)
+    array.unshift(htfCandles, newCandle)
+    cleanupOldCandles()
+
+// Update current candle EVERY bar (not just on new periods)
+if array.size(htfCandles) > 0 and barstate.isconfirmed
+    currentCandle = safeGet(htfCandles, 0)
+    if not na(currentCandle)
+        // Update High: take highest high in the HTF period and track which bar created it
+        if high > currentCandle.h
+            currentCandle.h := high
+            currentCandle.highIdx := bar_index
+        // Update Low: take lowest low in the HTF period and track which bar created it
+        if low < currentCandle.l
+            currentCandle.l := low
+            currentCandle.lowIdx := bar_index
+        // Update Close: always use current bar's close
+        currentCandle.c := close
+        currentCandle.closeIdx := bar_index
+        array.set(htfCandles, 0, currentCandle)
+
+// C2/C3 Pattern Detection
+if isNewHTFPeriod and barstate.isconfirmed and array.size(htfCandles) >= 3 and showC2C3Detection
+    current = safeGet(htfCandles, 1)
+    previous = safeGet(htfCandles, 2)
+    twoBarsAgo = safeGet(htfCandles, 3)
+    
+    if not na(current) and not na(previous)
+        // Calculate bias
+        [bias, targetLevel, biasReason] = calculateBias(current, previous)
+        currentBias.bias := bias
+        currentBias.targetLevel := targetLevel
+        currentBias.biasReason := biasReason
+        currentBias.isActive := bias != 0
+        
+        // Get session boundary for label positioning
+        completedBoundary = array.size(sessionBoundaries) >= 2 ? safeGet(sessionBoundaries, 1) : na
+        
+        if not na(completedBoundary)
+            periodStartX = completedBoundary.barIndex  // This is the start of C2 period
+            periodEndX = bar_index
+            labelX = math.round((periodStartX + periodEndX) / 2)
+            
+            // Get C1 period start (previous boundary)
+            c1Boundary = array.size(sessionBoundaries) >= 3 ? safeGet(sessionBoundaries, 2) : na
+            c1PeriodStart = not na(c1Boundary) ? c1Boundary.barIndex : periodStartX
+            
+            // Detect C2
+            [isC2, isBullishC2, c2SweptLevel] = detectC2(current, previous)
+            if isC2
+                labelY = isBullishC2 ? current.l * 0.998 : current.h * 1.002
+                labelStyle = isBullishC2 ? label.style_label_up : label.style_label_down
+                c2Label = label.new(x=labelX, y=labelY, text="C2", color=color.new(color.white, 100), textcolor=c2LabelColor, style=labelStyle, size=size.normal)
+                
+                // Get the bar index where the swept level was created (needed for both line and pattern storage)
+                c1SweptBarIndex = isBullishC2 ? previous.lowIdx : previous.highIdx
+                
+                var line sweptLine = na
+                if showSweptLevels
+                    // Chart TF Line: From the actual bar where C1's high/low occurred → End of C2 session
+                    sweptLine := line.new(x1=c1SweptBarIndex, y1=c2SweptLevel, x2=bar_index, y2=c2SweptLevel, color=sweptLevelColor, style=line.style_solid, width=1)
+                
+                c2Pattern = C2C3Pattern.new(patternType="C2", sweptLevel=c2SweptLevel, isBullish=isBullishC2, c1PeriodStart=c1SweptBarIndex, c2PeriodEnd=bar_index, patternLabel=c2Label, sweptLevelLine=sweptLine)
+                array.unshift(c2c3Patterns, c2Pattern)
+            
+            // Detect C3
+            [isC3, isBullishC3, c3SweptLevel] = detectC3(current, previous, twoBarsAgo)
+            if isC3
+                labelY = isBullishC3 ? current.l * 0.995 : current.h * 1.005
+                labelStyle = isBullishC3 ? label.style_label_up : label.style_label_down
+                c3Label = label.new(x=labelX, y=labelY, text="C3", color=color.new(color.white, 100), textcolor=c3LabelColor, style=labelStyle, size=size.normal)
+                
+                var line sweptLine = na
+                if showSweptLevels
+                    // HTF candle level line (between period separators - finite)
+                    sweptLine := line.new(x1=periodStartX, y1=c3SweptLevel, x2=periodEndX, y2=c3SweptLevel, color=sweptLevelColor, style=line.style_solid, width=1)
+                
+                c3Pattern = C2C3Pattern.new(patternType="C3", sweptLevel=c3SweptLevel, isBullish=isBullishC3, c1PeriodStart=c1PeriodStart, c2PeriodEnd=periodStartX, patternLabel=c3Label, sweptLevelLine=sweptLine)
+                array.unshift(c2c3Patterns, c3Pattern)
+    
+    // Cleanup old patterns - use user-defined limit
+    while array.size(c2c3Patterns) > maxC2C3Patterns
+        oldPattern = array.pop(c2c3Patterns)
+        if not na(oldPattern)
+            if not na(oldPattern.patternLabel)
+                label.delete(oldPattern.patternLabel)
+            if not na(oldPattern.sweptLevelLine)
+                line.delete(oldPattern.sweptLevelLine)
+
+// 50% Level Management
+if show50Levels and array.size(htfCandles) >= 2 and showHTFCandles and barstate.islast
+    previousCandle = safeGet(htfCandles, 1)
+    if not na(previousCandle)
+        fiftyLevel = (previousCandle.h + previousCandle.l) / 2
+        candleCount = array.size(htfCandles)
+        
+        // Calculate positions
+        previousPos = candleCount - 1 - 1
+        currentPos = candleCount - 0 - 1
+        startX = bar_index + htfCandleOffset + previousPos * (htfCandleWidth + htfCandleSpacing)
+        endX = bar_index + htfCandleOffset + currentPos * (htfCandleWidth + htfCandleSpacing) + htfCandleWidth + htfCandleSpacing
+        
+        if not na(fiftyLine)
+            line.delete(fiftyLine)
+        fiftyLine := line.new(x1=startX, y1=fiftyLevel, x2=endX, y2=fiftyLevel, color=fiftyLevelColor, style=line.style_dotted, width=1)
+
+// Swept Level Lines Management (Chart Level) - Only for C2 patterns
+if showSweptLevels and array.size(c2c3Patterns) > 0 and barstate.islast
+    // Delete old HTF lines first (they get recreated with current positions)
+    for i = 0 to array.size(c2c3Patterns) - 1
+        pattern = array.get(c2c3Patterns, i)
+        if not na(pattern) and not na(pattern.sweptLevelLine)
+            line.delete(pattern.sweptLevelLine)
+    
+    // Render swept level lines for C2 patterns only
+    for i = 0 to math.min(array.size(c2c3Patterns) - 1, maxC2C3Patterns - 1)
+        pattern = array.get(c2c3Patterns, i)
+        if not na(pattern) and pattern.patternType == "C2"
+            // Chart TF Line: From actual bar where swept level occurred → End of C2 session  
+            chartSweptLine = line.new(x1=pattern.c1PeriodStart, y1=pattern.sweptLevel, x2=pattern.c2PeriodEnd, y2=pattern.sweptLevel, color=sweptLevelColor, style=line.style_solid, width=1)
+            
+            // HTF Candle Line: From C1 candle wick → extends to C3 position (or current if C3 doesn't exist yet)
+            if showHTFCandles and array.size(htfCandles) > 0
+                c1CandleIndex = 2 + i  // C1 shifts back as patterns age
+                c3CandleIndex = 0 + i  // C3 would be at current position + pattern age
+                if array.size(htfCandles) > c1CandleIndex
+                    c1Candle = safeGet(htfCandles, c1CandleIndex)
+                    
+                    if not na(c1Candle)
+                        // Get the actual wick X position from rendered C1 candle
+                        candleCount = array.size(htfCandles)
+                        c1CandlePos = candleCount - c1CandleIndex - 1
+                        c3CandlePos = candleCount - c3CandleIndex - 1  // Extend to where C3 would be
+                        c1WickX = bar_index + htfCandleOffset + c1CandlePos * (htfCandleWidth + htfCandleSpacing) + htfCandleWidth / 2
+                        c3EndX = bar_index + htfCandleOffset + c3CandlePos * (htfCandleWidth + htfCandleSpacing) + htfCandleWidth
+                        
+                        // Update the pattern's HTF line (recreate it at current positions)
+                        updatedHtfLine = line.new(x1=c1WickX, y1=pattern.sweptLevel, x2=c3EndX, y2=pattern.sweptLevel, color=sweptLevelColor, style=line.style_solid, width=1)
+                        pattern.sweptLevelLine := updatedHtfLine
+                        array.set(c2c3Patterns, i, pattern)
+
+// Period Separators
+if showPeriodSeparators and array.size(sessionBoundaries) > 0 and barstate.islast
+    for i = 0 to array.size(sessionBoundaries) - 1
+        boundary = array.get(sessionBoundaries, i)
+        if not na(boundary)
+            line.new(x1=boundary.barIndex, y1=high * 1.1, x2=boundary.barIndex, y2=low * 0.9, color=separatorColor, style=line.style_dotted, width=1, extend=extend.both)
+            
+            if showSeparatorLabels
+                positionIndex = array.size(sessionBoundaries) - i
+                labelText = htfTimeframe + " #" + str.tostring(positionIndex)
+                label.new(x=boundary.barIndex, y=low * 0.95, text=labelText, color=color.new(color.white, 100), textcolor=color.black, style=label.style_label_up, size=size.small)
+
+// HTF Candle Rendering
+if showHTFCandles and array.size(htfCandles) > 0 and barstate.islast
+    candleCount = array.size(htfCandles)
+    
+    for i = candleCount - 1 to 0
+        htfCandle = safeGet(htfCandles, i)
+        if not na(htfCandle)
+            positionIndex = candleCount - i - 1
+            candleOffset = htfCandleOffset + positionIndex * (htfCandleWidth + htfCandleSpacing)
+            
+            // Delete existing objects
+            if not na(htfCandle.candleBody)
+                box.delete(htfCandle.candleBody)
+            if not na(htfCandle.wickUp)
+                line.delete(htfCandle.wickUp)
+            if not na(htfCandle.wickDown)
+                line.delete(htfCandle.wickDown)
+            
+            // Draw candle
+            isBull = htfCandle.c >= htfCandle.o
+            bodyColor = isBull ? htfBullBodyColor : htfBearBodyColor
+            bodyTop = math.max(htfCandle.o, htfCandle.c)
+            bodyBottom = math.min(htfCandle.o, htfCandle.c)
+            leftX = bar_index + candleOffset
+            rightX = leftX + htfCandleWidth
+            
+            htfCandle.candleBody := box.new(left=leftX, top=bodyTop, right=rightX, bottom=bodyBottom, bgcolor=bodyColor, border_color=htfBorderColor, border_width=1)
+            
+            wickX = leftX + htfCandleWidth / 2
+            if htfCandle.h > bodyTop
+                htfCandle.wickUp := line.new(x1=wickX, y1=htfCandle.h, x2=wickX, y2=bodyTop, color=htfWickColor, width=1)
+            if htfCandle.l < bodyBottom
+                htfCandle.wickDown := line.new(x1=wickX, y1=htfCandle.l, x2=wickX, y2=bodyBottom, color=htfWickColor, width=1)
+            
+            array.set(htfCandles, i, htfCandle)
+
+// HTF Label
+if showHTFCandles and barstate.islast and array.size(htfCandles) > 0
+    if not na(htfLabel)
+        label.delete(htfLabel)
+    
+    candleCount = array.size(htfCandles)
+    totalWidth = candleCount * htfCandleWidth + (candleCount - 1) * htfCandleSpacing
+    centerX = bar_index + htfCandleOffset + totalWidth / 2
+    
+    highestPoint = 0.0
+    for i = 0 to candleCount - 1
+        htfCandle = safeGet(htfCandles, i)
+        if not na(htfCandle)
+            highestPoint := math.max(highestPoint, htfCandle.h)
+    
+    htfLabel := label.new(centerX, highestPoint, htfTimeframe, color=color.new(color.white, 100), textcolor=color.black, style=label.style_label_down, size=size.normal)
+
+// Info Table
+if showInfoTable and barstate.islast
+    infoTable = table.new(position=position.top_right, columns=2, rows=6, bgcolor=color.new(color.white, 90), border_width=1, border_color=color.gray)
+    
+    table.cell(infoTable, 0, 0, "Chart TF:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 0, timeframe.period, text_color=color.blue, text_size=size.small)
+    
+    table.cell(infoTable, 0, 1, "HTF TF:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 1, htfTimeframe, text_color=color.blue, text_size=size.small)
+    
+    table.cell(infoTable, 0, 2, "HTF Candles:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(array.size(htfCandles)), text_color=color.blue, text_size=size.small)
+    
+    table.cell(infoTable, 0, 3, "C2/C3 Patterns:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 3, str.tostring(array.size(c2c3Patterns)), text_color=color.blue, text_size=size.small)
+    
+    table.cell(infoTable, 0, 4, "Current Bias:", text_color=color.black, text_size=size.small)
+    biasText = currentBias.isActive ? (currentBias.bias > 0 ? "PCH" : "PCL") : "None"
+    biasColor = currentBias.isActive ? (currentBias.bias > 0 ? color.green : color.red) : color.gray
+    table.cell(infoTable, 1, 4, biasText, text_color=biasColor, text_size=size.small)
+    
+    table.cell(infoTable, 0, 5, "Bias Reason:", text_color=color.black, text_size=size.small)
+    table.cell(infoTable, 1, 5, currentBias.biasReason, text_color=color.gray, text_size=size.small)
